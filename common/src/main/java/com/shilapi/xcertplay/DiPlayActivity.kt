@@ -564,6 +564,7 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button("${getString(R.string.choose_iphone_prefix)}${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }, matchButton(12, 60))
         }
         bydAdbSettings(content)
+        section(content, "USB conflicts", R.drawable.ic_dp_connection) { card -> usbCompetitorsSection(card) }
         section(content, "Updates", R.drawable.ic_dp_about) { card -> updateSection(card) }
         section(content, "Equalizer and bass boost", R.drawable.ic_dp_audio) { card -> audioEffectsSection(card) }
         section(content, getString(R.string.display_and_performance), R.drawable.ic_dp_display) { card ->
@@ -2944,8 +2945,19 @@ class DiPlayActivity : ComponentActivity() {
             AirPlayPersistence.saveWirelessEnabled(this, wireless)
             openProjection()
         }
-        if (CarPlayBackgroundSession.hasSession()) CarPlayBackgroundSession.stop { runOnUiThread { open() } }
-        else open()
+        val prepared = {
+            if (!wireless && UsbCompetitors.stopSet(this).isNotEmpty()) {
+                // Kill the selected phone-link apps first so DiPlay claims the iPhone before they do.
+                Thread {
+                    val summary = runCatching { UsbCompetitors.stopSelected(this) }.getOrElse { "stop failed: ${it.message}" }
+                    android.util.Log.i("DiPlay-USB", "competitors before connect: $summary")
+                    runOnUiThread { toast("USB competitors: $summary") }
+                    runOnUiThread { if (!isFinishing && !isDestroyed) open() }
+                }.start()
+            } else open()
+        }
+        if (CarPlayBackgroundSession.hasSession()) CarPlayBackgroundSession.stop { runOnUiThread { prepared() } }
+        else prepared()
     }
     private fun openProjection() {
         startActivity(Intent(this, CarPlayHostActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
@@ -3383,6 +3395,81 @@ class DiPlayActivity : ComponentActivity() {
             languageButton.setOnClickListener { AppLocale.showPicker(this) }
             card.addView(languageButton, matchButton(12, 60))
         }
+    }
+
+    // ---- Legacy fork: USB competitors --------------------------------------------------------
+
+    private fun usbCompetitorsSection(card: LinearLayout) {
+        card.addView(label("Other apps that handle USB devices can grab the iPhone before DiPlay. Tick the ones to stop right before every USB connect. Stop now kills their background processes (foreground services survive). Disable/Enable use the head unit's ADB and ask for debugging approval once.", 14, MUTED))
+        card.addView(label("Tip: when Android shows \"Choose an app\" after plugging in, pick DiPlay and tick Use by default.", 14, MUTED).apply { setPadding(0, dp(8), 0, dp(8)) })
+        card.addView(button("Make DiPlay the default for the iPhone", true) { requestDefaultUsbHandler() }, matchButton(4, 56))
+        card.addView(label("Opens Android's USB access prompt for the plugged-in iPhone; tick \"Use by default\" there. Android only shows it when access is not yet granted for this plug-in, so unplug and replug the phone first if nothing appears.", 13, MUTED).apply { setPadding(0, dp(6), 0, dp(8)) })
+        val handlers = UsbCompetitors.list(this)
+        if (handlers.isEmpty()) {
+            card.addView(label("No other USB handler apps found.", 15, TEXT))
+            return
+        }
+        val stopSet = UsbCompetitors.stopSet(this)
+        handlers.forEach { handler ->
+            val state = buildString {
+                append(handler.packageName)
+                if (handler.system) append(" · system")
+                if (!handler.enabled) append(" · DISABLED")
+                if (handler.declaresUsbAttach) append(" · handles USB attach")
+                if (handler.likely) append(" · likely phone-link app")
+            }
+            card.addView(label(handler.label, 17, TEXT, true).apply { setPadding(0, dp(14), 0, 0) })
+            card.addView(label(state, 13, MUTED))
+            toggle(card, "Stop before USB connect", "", handler.packageName in stopSet) { enabled ->
+                UsbCompetitors.setStopBeforeConnect(this, handler.packageName, enabled)
+            }
+            val actions = row()
+            fun adbButton(title: String, command: String) = button(title, false) {
+                toast("Running through head-unit ADB…")
+                Thread {
+                    val outcome = runCatching { UsbCompetitors.runAdb(this, listOf(command)) }
+                    runOnUiThread {
+                        val text = outcome.getOrNull()?.let { o ->
+                            if (o.access != com.shilapi.xcertplay.adb.LocalAdb.Access.READY)
+                                "ADB ${o.access}. Enable ADB over network (port 5555) on the head unit and approve the debugging prompt, or run on a computer:\n\nadb shell $command"
+                            else o.lines.joinToString("\n\n")
+                        } ?: "ADB failed: ${outcome.exceptionOrNull()?.message}"
+                        AlertDialog.Builder(this).setTitle(handler.label).setMessage(text)
+                            .setPositiveButton(getString(R.string.close)) { _, _ -> render() }.show()
+                    }
+                }.start()
+            }
+            actions.addView(button("Stop now", true) {
+                val killed = UsbCompetitors.killBackground(this, handler.packageName)
+                toast(if (killed) "Background processes of ${handler.label} killed" else "Could not kill ${handler.label}")
+                Thread { runCatching { UsbCompetitors.runAdb(this, listOf(UsbCompetitors.forceStopCommand(handler.packageName))) } }.start()
+            }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(6) })
+            actions.addView(adbButton(if (handler.enabled) "Disable (ADB)" else "Enable (ADB)",
+                if (handler.enabled) UsbCompetitors.disableCommand(handler.packageName) else UsbCompetitors.enableCommand(handler.packageName)),
+                LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(6) })
+            actions.addView(button("Clear defaults", false) {
+                toast("Open by default → Clear defaults")
+                openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${handler.packageName}")))
+            }, LinearLayout.LayoutParams(0, dp(52), 1f))
+            card.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        }
+    }
+
+    /** Shows Android's USB access prompt for the attached iPhone, which carries the "Use by default" checkbox. */
+    private fun requestDefaultUsbHandler() {
+        val usb = getSystemService(android.hardware.usb.UsbManager::class.java)
+        val iphone = usb?.deviceList?.values?.firstOrNull { it.vendorId == 0x05ac }
+        if (usb == null || iphone == null) { toast("Plug the iPhone in first, then tap again."); return }
+        if (usb.hasPermission(iphone)) {
+            AlertDialog.Builder(this).setTitle("Already allowed for this plug-in")
+                .setMessage("Android only shows the prompt with the \"Use by default\" checkbox when access has not been granted yet. Unplug the iPhone, plug it back in, then tap this button again and tick the checkbox.")
+                .setPositiveButton(getString(R.string.close), null).show()
+            return
+        }
+        val flags = if (Build.VERSION.SDK_INT >= 31) android.app.PendingIntent.FLAG_MUTABLE else 0
+        val pending = android.app.PendingIntent.getBroadcast(this, 7, Intent("$packageName.DEFAULT_HANDLER_REQUEST").setPackage(packageName), flags)
+        runCatching { usb.requestPermission(iphone, pending) }
+            .onFailure { toast("Could not open the USB prompt: ${it.message}") }
     }
 
     // ---- Legacy fork: in-app updater -------------------------------------------------------
