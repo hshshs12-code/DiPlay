@@ -244,7 +244,8 @@ class IphoneUsbHost(
                 ?: throw IphoneUsbException.Protocol(
                     "Re-enumerated iPhone exposes no USBMUX CarPlay configuration",
                 )
-            if (!UsbConfigurationControl.ensureConfiguration(device, connection, configuration, onDiagnostic)) {
+            if (!UsbConfigurationControl.ensureConfiguration(device, connection, configuration,
+                    openConnection = { runCatching { usbManager.openDevice(device) }.getOrNull() }, onDiagnostic = onDiagnostic)) {
                 throw IphoneUsbException.DeviceUnavailable(
                     "iPhone could not be switched to CarPlay configuration ${configuration.id}; " +
                         UsbClaimDiagnostics.describe(device),

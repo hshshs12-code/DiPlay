@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.6)
+## Fork features (0.2.13-legacy24.7)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -61,8 +61,10 @@ Runtime guards for APIs newer than 24:
   SET_CONFIGURATION from usbfs while any interface is claimed, so the CarPlay
   configuration was never active and the NCM claim targeted a non-existent
   interface. DiPlay now reads the active configuration (GET_CONFIGURATION),
-  detaches the kernel drivers from every interface of it with a forced
-  claim/release, selects the CarPlay configuration, verifies it, and fails
+  detaches the kernel drivers from every interface of it with a forced claim on
+  a throwaway connection that is then closed without releaseInterface (Android's
+  releaseInterface re-attaches the kernel driver at once), selects the CarPlay
+  configuration on a clean connection, verifies it, and fails
   with the reason instead of "claiming anyway". The NCM open re-checks the
   active configuration on its own connection.
 - **USB conflicts** (Settings → USB conflicts): lists the other apps on the
