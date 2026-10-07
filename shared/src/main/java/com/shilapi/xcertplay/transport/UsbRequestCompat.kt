@@ -29,13 +29,19 @@ internal class UsbRequestCompat : Closeable {
         Thread(runnable, "xcertplay-usb-wait").apply { isDaemon = true }
     }
 
-    fun queue(request: UsbRequest, buffer: ByteBuffer): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            request.queue(buffer)
-        } else {
-            @Suppress("DEPRECATION")
-            request.queue(buffer, buffer.remaining())
-        }
+    /**
+     * Below API 28 one transfer is limited to 16384 bytes. Android 8.x's `queue(ByteBuffer)`
+     * throws IllegalArgumentException above that (Android 7 has no such overload), while the
+     * two-argument variant simply clips, so both use it with the limit applied to the buffer so
+     * the caller's bookkeeping matches what the kernel will fill.
+     */
+    fun queue(request: UsbRequest, buffer: ByteBuffer): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) return request.queue(buffer)
+        val length = minOf(buffer.remaining(), LegacyUsbLimits.LEGACY_MAX_TRANSFER_BYTES)
+        buffer.limit(buffer.position() + length)
+        @Suppress("DEPRECATION")
+        return request.queue(buffer, length)
+    }
 
     /** Returns null when no request completed. Throws [TimeoutException] when [timeoutMillis] elapses. */
     fun requestWait(connection: UsbDeviceConnection, timeoutMillis: Long): UsbRequest? {

@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.7)
+## Fork features (0.2.13-legacy24.8)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -81,6 +81,11 @@ Runtime guards for APIs newer than 24:
   iPhone's interfaces (bound kernel driver per interface), and the diagnostic
   report lists every app on the head unit that handles USB device attach, so a
   factory phone-link app holding the iPhone shows up by name.
+- **USB reads below Android 9**: Android 8.x's `UsbRequest.queue(ByteBuffer)`
+  throws IllegalArgumentException for buffers over 16384 bytes (the upstream
+  policy expected `false`), so the 64 KiB USBMUX and 32 KiB NCM reads failed
+  on the first request ("USBMUX read failed"). `UsbRequestCompat` now uses the
+  two-argument `queue(buffer, length)` with a 16 KiB cap below API 28.
 - **USB writes below Android 9**: `bulkTransfer` silently clips a transfer to
   16384 bytes before API 28. The USBMUX writer sent 16 KiB payloads plus 36
   header bytes in one transfer, which came back short and failed the session.
