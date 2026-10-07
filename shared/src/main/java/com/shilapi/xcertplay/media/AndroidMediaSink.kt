@@ -187,6 +187,7 @@ class AndroidMediaSink(
 ) : MediaSink {
     private val appContext = context?.applicationContext
     private val audioManager = appContext?.getSystemService(AudioManager::class.java)
+    init { appContext?.let { AudioEffectSettings.load(it) } }
     private val audioFocusCoordinator = AudioFocusCoordinator(
         appContext,
         audioFocusEnabled,
@@ -846,6 +847,7 @@ private class AudioRenderer(
     @Volatile private var started = false
     private var codec: MediaCodec? = null
     private var track: AudioTrack? = null
+    private var effects: AudioEffectController? = null
     private var pcm = ByteArray(64 * 1024)
     private var playbackStarted = false
     private var prebufferBytes = 0
@@ -1059,6 +1061,13 @@ private class AudioRenderer(
             )
         }
         track = built
+        if (selection.channel == AudioChannel.MEDIA) {
+            diagnosticStage = "track-effects"
+            effects = runCatching {
+                AudioEffectController.attach(built.audioSessionId, AudioEffectSettings.current(null))
+            }.onFailure { Log.w(TAG, "audio effects unavailable", it) }.getOrNull()
+            effects?.let { runCatching { report("Audio: ${it.describe()}") } }
+        }
         diagnosticStage = "track-attributes"
         trackAttributes = audioTrackAttributesForFocus(built, attributes)
         diagnosticStage = "track-capacity"
@@ -1528,6 +1537,8 @@ private class AudioRenderer(
         }
         val track = track
         this.track = null
+        runCatching { effects?.close() }
+        effects = null
         if (track != null) {
             try {
                 track.pause()

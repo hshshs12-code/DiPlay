@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Downloaded update APKs; shared with the system installer for the manual fallback. -->
+    <external-files-path name="updates" path="updates/" />
+    <files-path name="updates_internal" path="updates/" />
+</paths>

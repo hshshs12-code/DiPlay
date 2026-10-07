@@ -39,6 +39,23 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
+## Fork features (0.2.13-legacy24.2)
+
+- **In-app updater** (Settings → Updates): reads the latest release of
+  `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
+  and installs it through PackageInstaller (Android shows the confirmation).
+  Publish updates as normal releases (not pre-releases) with a tag such as
+  `v0.2.13-legacy24.3`; the updater compares the numbers in the tag with the
+  installed version name.
+- **Equalizer, bass boost, loudness** (Settings → Equalizer and bass boost):
+  Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
+  CarPlay media track. Band layout comes from the device. Changes apply live to
+  a playing track; enabling the feature applies on the next track or reconnect.
+- **USB writes below Android 9**: `bulkTransfer` silently clips a transfer to
+  16384 bytes before API 28. The USBMUX writer sent 16 KiB payloads plus 36
+  header bytes in one transfer, which came back short and failed the session.
+  Writes are now chunked to 16 KiB on API < 28 (`LegacyUsbLimits`).
+
 ## Wireless on Android 7 and 8
 
 - Android 7 to 9 only expose the original `createGroup` overload, so the

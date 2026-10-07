@@ -69,7 +69,15 @@ class NcmUsbBridge internal constructor(
             this.sequence.also { this.sequence = (this.sequence + 1) and 0xffff }
         }
         val block = Ntb16Codec.build(frame, sequence)
-        val transferred = connection.bulkTransfer(outEndpoint, block, block.size, timeoutMillis)
+        val first = LegacyUsbLimits.maxTransferBytes(block.size)
+        var transferred = connection.bulkTransfer(outEndpoint, block, first, timeoutMillis)
+        if (transferred == first && first < block.size) {
+            // Pre-API-28 16 KiB clip; an NTB carrying one Ethernet frame never reaches it, but
+            // finish the block rather than leave a truncated NTB on the wire.
+            val rest = block.copyOfRange(first, block.size)
+            val sent = connection.bulkTransfer(outEndpoint, rest, rest.size, timeoutMillis)
+            transferred = if (sent == rest.size) block.size else -1
+        }
         // Before StartCarPlaySession the phone keeps the NCM data path NAKed. Android reports the
         // resulting timeout as -1; it is not a detach and later packets must be allowed to retry.
         if (transferred <= 0) {

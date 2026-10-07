@@ -67,6 +67,10 @@ import kotlin.math.roundToInt
 /** DiAuto's visual language, with a connection flow for an independent CarPlay receiver. */
 class DiPlayActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
+    // Legacy fork in-app updater: live only while the settings page is on screen.
+    private var updateBusy = false
+    private var updateMessage: TextView? = null
+    private var updateActionButton: Button? = null
     private var windowLearning: WindowKeyLearning? = null
     private val windowLearningPresses = WheelKeyPresses()
     private val endWindowLearning = Runnable { cancelKeyLearning() }
@@ -552,6 +556,8 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button("${getString(R.string.choose_iphone_prefix)}${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }, matchButton(12, 60))
         }
         bydAdbSettings(content)
+        section(content, "Updates", R.drawable.ic_dp_about) { card -> updateSection(card) }
+        section(content, "Equalizer and bass boost", R.drawable.ic_dp_audio) { card -> audioEffectsSection(card) }
         section(content, getString(R.string.display_and_performance), R.drawable.ic_dp_display) { card ->
             val nightModes = CarPlayNightMode.entries
             val nightMode = AirPlayPersistence.loadCarPlayNightMode(this)
@@ -3300,6 +3306,154 @@ class DiPlayActivity : ComponentActivity() {
             languageButton.setOnClickListener { AppLocale.showPicker(this) }
             card.addView(languageButton, matchButton(12, 60))
         }
+    }
+
+    // ---- Legacy fork: in-app updater -------------------------------------------------------
+
+    private fun updateSection(card: LinearLayout) {
+        updateMessage = label("Installed ${version()}. Updates come from github.com/${AppUpdater.REPO} releases.", 15, MUTED)
+        card.addView(updateMessage)
+        updateActionButton = button("Check for updates", true) { startUpdateCheck() }
+        card.addView(updateActionButton, matchButton(12, 60))
+        card.addView(label("Android asks you to confirm the install. DiPlay closes briefly and reopens itself.", 14, MUTED).apply {
+            setPadding(0, dp(10), 0, 0)
+        })
+    }
+
+    private fun startUpdateCheck() {
+        if (updateBusy) return
+        updateBusy = true
+        updateActionButton?.isEnabled = false
+        updateMessage?.text = "Checking GitHub for the latest release…"
+        Thread {
+            val result = runCatching { AppUpdater.latestRelease() }
+            val current = AppUpdater.currentVersion(this)
+            handler.post {
+                updateBusy = false
+                updateActionButton?.isEnabled = true
+                val release = result.getOrNull()
+                when {
+                    release == null -> updateMessage?.text =
+                        "Check failed: ${result.exceptionOrNull()?.message ?: "no network"}."
+                    !AppUpdater.isNewer(release.version, current) -> updateMessage?.text =
+                        "You have the newest release (${release.version})."
+                    else -> {
+                        val size = if (release.sizeBytes > 0) " (${release.sizeBytes / 1048576} MB)" else ""
+                        updateMessage?.text = "Release ${release.version} is available$size. Installed: $current."
+                        updateActionButton?.text = "Download and install ${release.version}"
+                        updateActionButton?.setOnClickListener { startUpdateDownload(release) }
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun startUpdateDownload(release: AppUpdater.Release) {
+        if (updateBusy) return
+        updateBusy = true
+        updateActionButton?.isEnabled = false
+        updateMessage?.text = "Downloading ${release.version}…"
+        Thread {
+            var lastPercent = -1
+            val result = runCatching {
+                AppUpdater.downloadApk(this, release) { done, total ->
+                    if (total > 0) {
+                        val percent = (done * 100 / total).toInt()
+                        if (percent != lastPercent) {
+                            lastPercent = percent
+                            handler.post { updateMessage?.text = "Downloading ${release.version}… $percent%" }
+                        }
+                    }
+                }
+            }
+            handler.post {
+                val apk = result.getOrNull()
+                if (apk == null) {
+                    updateMessage?.text = "Download failed: ${result.exceptionOrNull()?.message ?: "no network"}."
+                    updateBusy = false
+                    updateActionButton?.isEnabled = true
+                    return@post
+                }
+                updateMessage?.text = "Downloaded ${apk.length() / 1048576} MB."
+                AlertDialog.Builder(this).setTitle("Install ${release.version}?")
+                    .setMessage("Android will ask you to confirm. DiPlay closes during the install and reopens afterwards. Settings and pairing are kept.")
+                    .setPositiveButton("Install") { _, _ ->
+                        updateMessage?.text = "Installing…"
+                        AppUpdater.rememberManualApk(this, apk)
+                        Thread {
+                            val installed = runCatching { AppUpdater.installApk(this, apk) }
+                            handler.post {
+                                if (installed.isFailure) {
+                                    updateMessage?.text = "Install session failed; opening the system installer."
+                                    runCatching { AppUpdater.installManually(this, apk) }
+                                        .onFailure { updateMessage?.text = "Could not open the installer: ${it.message}" }
+                                }
+                                updateBusy = false
+                                updateActionButton?.isEnabled = true
+                            }
+                        }.start()
+                    }
+                    .setNegativeButton("Later") { _, _ ->
+                        AppUpdater.clearManualApk(this)
+                        updateBusy = false
+                        updateActionButton?.isEnabled = true
+                        updateMessage?.text = "Install cancelled. The download is kept until you update."
+                    }.show()
+            }
+        }.start()
+    }
+
+    // ---- Legacy fork: equalizer, bass boost, loudness ---------------------------------------
+
+    private fun audioEffectsSection(card: LinearLayout) {
+        var settings = com.shilapi.xcertplay.media.AudioEffectSettings.load(this)
+        val controls = column()
+        fun save(next: com.shilapi.xcertplay.media.AudioEffectSettings) {
+            settings = next
+            com.shilapi.xcertplay.media.AudioEffectSettings.save(this, next)
+        }
+        toggle(card, "Enable audio effects", "Equalizer, bass boost and loudness apply to CarPlay music. Takes effect on the next song or reconnect; changes below apply live.",
+            settings.enabled) { enabled ->
+            save(settings.copy(enabled = enabled))
+            controls.visibility = if (enabled) View.VISIBLE else View.GONE
+        }
+        controls.visibility = if (settings.enabled) View.VISIBLE else View.GONE
+        val bassSteps = (0..100 step 5).toList()
+        controls.addView(overlaySliderRow("Bass boost", bassSteps, (settings.bassStrength / 10 / 5) * 5) { "$it %" }.apply {
+            onSave = { save(settings.copy(bassStrength = it * 10)) }
+        })
+        val loudSteps = (0..20).toList()
+        controls.addView(overlaySliderRow("Loudness boost", loudSteps, settings.loudnessGainMb / 100) {
+            if (it == 0) "Off" else "+$it dB"
+        }.apply {
+            onSave = { save(settings.copy(loudnessGainMb = it * 100)) }
+        })
+        controls.addView(label("Loudness boost raises quiet sources; too much distorts. Equalizer bands in dB:", 14, MUTED).apply {
+            setPadding(0, dp(12), 0, 0)
+        })
+        val info = com.shilapi.xcertplay.media.AudioEffectSettings.bandInfo()
+        val minDb = info.minLevelMb / 100
+        val maxDb = info.maxLevelMb / 100
+        val dbSteps = (minDb..maxDb).toList()
+        info.centerHz.forEachIndexed { band, hz ->
+            val title = if (hz >= 1000) "${hz / 1000} kHz" else "$hz Hz"
+            val current = (settings.bandLevelsMb.getOrElse(band) { 0 } / 100).coerceIn(minDb, maxDb)
+            controls.addView(overlaySliderRow(title, dbSteps, current) { if (it > 0) "+$it dB" else "$it dB" }.apply {
+                onSave = { level ->
+                    val levels = MutableList(maxOf(settings.bandLevelsMb.size, info.centerHz.size)) { settings.bandLevelsMb.getOrElse(it) { 0 } }
+                    levels[band] = level * 100
+                    save(settings.copy(bandLevelsMb = levels))
+                }
+            })
+        }
+        controls.addView(button("Reset equalizer", false) {
+            save(settings.copy(bandLevelsMb = List(info.centerHz.size) { 0 }, bassStrength = 0, loudnessGainMb = 0))
+            render()
+        }, matchButton(12, 56))
+        controls.addView(label("Audio quality: CarPlay sends what the iPhone negotiates (AAC-LC or 16-bit PCM at 44.1/48 kHz). The receiver cannot raise it; the music buffer under Display and performance trades latency for stability.", 14, MUTED).apply {
+            setPadding(0, dp(12), 0, 0)
+        })
+        card.addView(controls)
     }
 
     private fun section(parent: LinearLayout, title: String, icon: Int? = null, build: (LinearLayout) -> Unit) {

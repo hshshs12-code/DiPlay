@@ -346,11 +346,30 @@ class Iap2UsbSession internal constructor(
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         if (data.isEmpty()) return@synchronized
-        val transferred = connection.bulkTransfer(outEndpoint, data, data.size, timeoutMillis)
-        if (transferred != data.size) {
-            throw IphoneUsbException.DeviceUnavailable(
-                "USBMUX write transferred $transferred of ${data.size} bytes",
-            )
+        // Before API 28 Android silently clips one bulk transfer to 16384 bytes, so a 16 KiB
+        // payload plus its 36 header bytes came back short and failed the session. Bulk OUT is a
+        // byte stream and 16384 is a multiple of the packet size, so chunking adds no short packet.
+        val chunk = LegacyUsbLimits.maxTransferBytes(data.size)
+        if (chunk >= data.size) {
+            val transferred = connection.bulkTransfer(outEndpoint, data, data.size, timeoutMillis)
+            if (transferred != data.size) {
+                throw IphoneUsbException.DeviceUnavailable(
+                    "USBMUX write transferred $transferred of ${data.size} bytes",
+                )
+            }
+            return@synchronized
+        }
+        var offset = 0
+        while (offset < data.size) {
+            val count = minOf(chunk, data.size - offset)
+            val slice = data.copyOfRange(offset, offset + count)
+            val transferred = connection.bulkTransfer(outEndpoint, slice, count, timeoutMillis)
+            if (transferred != count) {
+                throw IphoneUsbException.DeviceUnavailable(
+                    "USBMUX write transferred $transferred of $count bytes (offset $offset of ${data.size})",
+                )
+            }
+            offset += count
         }
     }
 
