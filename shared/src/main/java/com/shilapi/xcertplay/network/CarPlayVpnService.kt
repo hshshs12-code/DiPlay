@@ -105,9 +105,13 @@ class CarPlayVpnService : VpnService() {
                 ?: throw IOException("VpnService.establish returned null")
             tun = tunFd
 
-            val ipv6Bridge = Ipv6NcmBridge(ncm, tunFd, hostMac) { error ->
-                onTransportError(generation, listener, error)
-            }
+            val ipv6Bridge = Ipv6NcmBridge(
+                ncm, tunFd, hostMac,
+                onError = { error -> onTransportError(generation, listener, error) },
+                hostLinkLocal = address,
+                onDiagnostic = { line -> runCatching { listener.onDebugLog(line) } },
+            )
+            runCatching { listener.onDebugLog("wired VPN tun established address=$linkLocal/$LINK_PREFIX mtu=$TUN_MTU hostMac=${hostMac.joinToString(":") { "%02x".format(it.toInt() and 0xff) }}") }
             ipv6Bridge.start()
             bridge = ipv6Bridge
 
@@ -219,6 +223,7 @@ class CarPlayVpnService : VpnService() {
                 val socket: Socket = server.accept()
                 val acceptedAtNanos = System.nanoTime()
                 Log.i(TAG, "airplay connection accepted from ${socket.remoteSocketAddress}")
+                runCatching { attachment?.listener?.onDebugLog("airplay connection accepted from ${socket.remoteSocketAddress} port=${server.localPort}") }
                 socket.tcpNoDelay = true
                 socket.keepAlive = true
                 socket.setSoLinger(true, 0)

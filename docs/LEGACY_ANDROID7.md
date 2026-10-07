@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.8)
+## Fork features (0.2.13-legacy24.9)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -81,6 +81,11 @@ Runtime guards for APIs newer than 24:
   iPhone's interfaces (bound kernel driver per interface), and the diagnostic
   report lists every app on the head unit that handles USB device attach, so a
   factory phone-link app holding the iPhone shows up by name.
+- **Wired network diagnostics and local NDP** (`Ipv6NcmBridge`, `NdpResponder`):
+  the IPv6-over-NCM bridge now reports its first frames, 5-second link
+  counters, deferred unicast and the AirPlay accept into the diagnostic
+  report, and answers Neighbor Solicitations for the host link-local address
+  on the NCM link itself instead of relying on the head-unit kernel.
 - **USB reads below Android 9**: Android 8.x's `UsbRequest.queue(ByteBuffer)`
   throws IllegalArgumentException for buffers over 16384 bytes (the upstream
   policy expected `false`), so the 64 KiB USBMUX and 32 KiB NCM reads failed

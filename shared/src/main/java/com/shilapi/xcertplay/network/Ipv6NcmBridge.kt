@@ -24,7 +24,18 @@ class Ipv6NcmBridge(
     private val tun: ParcelFileDescriptor,
     private val hostMac: ByteArray,
     private val onError: (Throwable) -> Unit,
+    private val hostLinkLocal: java.net.Inet6Address? = null,
+    private val onDiagnostic: (String) -> Unit = {},
 ) : Closeable {
+    private var inFrames = 0L; private var inBytes = 0L; private var outFrames = 0L; private var outBytes = 0L
+    private var nsSeen = 0L; private var naSent = 0L; private var deferred = 0L
+    @Volatile private var lastCountersNanos = System.nanoTime()
+    private fun countersMaybe(force: Boolean = false) {
+        val now = System.nanoTime()
+        if (!force && now - lastCountersNanos < 5_000_000_000L) return
+        lastCountersNanos = now
+        onDiagnostic("ncm link counters in=$inFrames/${inBytes}B out=$outFrames/${outBytes}B ns=$nsSeen naLocal=$naSent deferredUnicast=$deferred peer=${peerMac?.macString() ?: "unknown"}")
+    }
     init {
         require(hostMac.size == EthernetIpv6Codec.MAC_BYTES) { "hostMac must be 6 bytes" }
     }
@@ -64,22 +75,35 @@ class Ipv6NcmBridge(
         val output = FileOutputStream(tun.fileDescriptor)
         try {
             while (running.get()) {
-                val frame = ncm.recv(READ_TIMEOUT_MILLIS) ?: continue
-                val ipv6 = EthernetIpv6Codec.parseIpv6View(frame) ?: continue
+                val frame = ncm.recv(READ_TIMEOUT_MILLIS)
+                if (frame == null) { countersMaybe(); continue }
+                val ipv6 = EthernetIpv6Codec.parseIpv6View(frame)
+                if (ipv6 == null) {
+                    inFrames++; inBytes += frame.size
+                    if (inboundLogBudget > 0) { inboundLogBudget--; onDiagnostic("ncm inbound non-ipv6 bytes=${frame.size}") }
+                    countersMaybe(); continue
+                }
+                inFrames++; inBytes += ipv6.payloadLength
                 peerMac = ipv6.sourceMac
                 if (!loggedInbound) {
                     loggedInbound = true
-                    Log.i(
-                        TAG,
-                        "ncm first inbound ipv6 bytes=${ipv6.payloadLength} " +
-                            "peer=${ipv6.sourceMac.macString()}",
-                    )
+                    onDiagnostic("ncm first inbound ipv6 bytes=${ipv6.payloadLength} peer=${ipv6.sourceMac.macString()}")
                 }
                 if (inboundLogBudget > 0) {
                     inboundLogBudget--
-                    Log.i(TAG, "ncm inbound ${frame.summary(ipv6.payloadOffset)}")
+                    onDiagnostic("ncm inbound ${frame.summary(ipv6.payloadOffset)}")
+                }
+                val host = hostLinkLocal
+                if (host != null && NdpResponder.solicitationFor(frame, ipv6.payloadOffset, ipv6.payloadLength, host)) {
+                    nsSeen++
+                    val advertisement = NdpResponder.advertisement(frame, ipv6.payloadOffset, host, hostMac)
+                    val destinationMac = EthernetIpv6Codec.multicastDestinationMac(advertisement) ?: ipv6.sourceMac
+                    runCatching { ncm.send(EthernetIpv6Codec.build(hostMac, destinationMac, advertisement), WRITE_TIMEOUT_MILLIS) }
+                        .onSuccess { naSent++; if (naSent <= 3) onDiagnostic("ncm answered neighbor solicitation locally target=${host.hostAddress} to=${destinationMac.macString()}") }
+                        .onFailure { onDiagnostic("ncm local neighbor advertisement failed: ${it.message}") }
                 }
                 output.write(frame, ipv6.payloadOffset, ipv6.payloadLength)
+                countersMaybe()
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
@@ -107,30 +131,29 @@ class Ipv6NcmBridge(
                 val tunPacket = buffer.copyOf(length)
                 val ipv6 = EthernetIpv6Codec.addNeighborAdvertisementTargetMac(tunPacket, hostMac)
                 if (ipv6.size != tunPacket.size) {
-                    Log.i(TAG, "ncm added target-link-layer option to neighbor advertisement")
+                    onDiagnostic("ncm added target-link-layer option to kernel neighbor advertisement")
                 }
                 if (outboundLogBudget > 0) {
                     outboundLogBudget--
-                    Log.i(TAG, "ncm outbound ${ipv6.summary(0)}")
+                    onDiagnostic("ncm outbound ${ipv6.summary(0)}")
                 }
                 val multicastMac = EthernetIpv6Codec.multicastDestinationMac(ipv6)
                 val mac = multicastMac ?: peerMac
                 if (mac == null) {
+                    deferred++
                     if (!loggedWaitingForPeer) {
                         loggedWaitingForPeer = true
-                        Log.i(TAG, "ncm deferred outbound unicast bytes=$length until peer MAC is learned")
+                        onDiagnostic("ncm deferred outbound unicast bytes=$length until peer MAC is learned")
                     }
                     continue
                 }
                 if (!loggedOutbound) {
                     loggedOutbound = true
-                    Log.i(
-                        TAG,
-                        "ncm first outbound ipv6 bytes=$length destination=${mac.macString()} multicast=${multicastMac != null}",
-                    )
+                    onDiagnostic("ncm first outbound ipv6 bytes=$length destination=${mac.macString()} multicast=${multicastMac != null}")
                 }
                 val frame = EthernetIpv6Codec.build(hostMac, mac, ipv6)
                 ncm.send(frame, WRITE_TIMEOUT_MILLIS)
+                outFrames++; outBytes += length
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
