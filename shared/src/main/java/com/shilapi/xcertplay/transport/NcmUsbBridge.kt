@@ -320,6 +320,8 @@ class NcmUsbBridge internal constructor(
 
     companion object {
         private const val READ_CHUNK_BYTES = 32 * 1024
+        private const val CLAIM_ATTEMPTS = 4
+        private const val CLAIM_RETRY_MILLIS = 350L
         private const val USB_PACKET_SIZE = 512
         private const val STATUS_POLL_TIMEOUT_MILLIS = 20
         private const val STATUS_POLL_INTERVAL_MILLIS = 500L
@@ -332,8 +334,22 @@ class NcmUsbBridge internal constructor(
             connection: UsbDeviceConnection,
             function: NcmFunctionDiscovery.NcmFunction,
             onDiagnostic: (String) -> Unit = {},
+            device: android.hardware.usb.UsbDevice? = null,
         ): NcmUsbBridge {
             val claimed = ArrayList<UsbInterface>(2)
+            // Cheap head units often have a factory phone-link service or a kernel class driver on
+            // the iPhone's NCM interfaces. Android's forced claim detaches a kernel driver but not
+            // another process, and a detach can need a moment, so retry before giving up and
+            // record who holds the interfaces when it still fails.
+            fun claimWithRetry(target: UsbInterface, label: String): Boolean {
+                repeat(CLAIM_ATTEMPTS) { attempt ->
+                    if (connection.claimInterface(target, true)) return true
+                    onDiagnostic("USB claim $label iface=${target.id}/${target.alternateSetting} failed attempt=${attempt + 1} " +
+                        UsbClaimDiagnostics.describe(device))
+                    if (attempt + 1 < CLAIM_ATTEMPTS) Thread.sleep(CLAIM_RETRY_MILLIS)
+                }
+                return false
+            }
             try {
                 val descriptorHostMac = readNcmHostMac(connection, function.control.id)
                 Log.i(
@@ -344,7 +360,7 @@ class NcmUsbBridge internal constructor(
                 // same interface id, so it must be claimed once and switched with setInterface.
                 val sameInterface = function.control.id == function.data.id
                 val first = if (sameInterface) function.data else function.control
-                val firstClaimed = connection.claimInterface(first, true)
+                val firstClaimed = claimWithRetry(first, "ncm-first")
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "claim iface=${first.id}/${first.alternateSetting} class=${first.interfaceClass}" +
@@ -352,12 +368,13 @@ class NcmUsbBridge internal constructor(
                 )
                 if (!firstClaimed) {
                     throw IphoneUsbException.DeviceUnavailable(
-                        "Android could not claim the NCM interface ${first.id}",
+                        "Android could not claim the NCM interface ${first.id}; " +
+                            UsbClaimDiagnostics.describe(device),
                     )
                 }
                 claimed.add(first)
                 if (!sameInterface) {
-                    val dataClaimed = connection.claimInterface(function.data, true)
+                    val dataClaimed = claimWithRetry(function.data, "ncm-data")
                     Log.i(
                         IphoneCarPlayConfiguration.TAG,
                         "claim iface=${function.data.id}/${function.data.alternateSetting}" +

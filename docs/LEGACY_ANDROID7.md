@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.3)
+## Fork features (0.2.13-legacy24.4)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -55,6 +55,12 @@ Runtime guards for APIs newer than 24:
   that Save produces to dpaste.com as an unlisted page that expires after
   7 days and shows a short link (dpaste.com/XXXXXX) to read off the screen.
   Reports over ~900 KB keep the header and the newest log lines.
+- **USB interface claim retries and ownership diagnostics**: a refused
+  `claimInterface` on the USBMUX or NCM interfaces is retried four times with a
+  350 ms gap. Each failure and the final error record the sysfs view of the
+  iPhone's interfaces (bound kernel driver per interface), and the diagnostic
+  report lists every app on the head unit that handles USB device attach, so a
+  factory phone-link app holding the iPhone shows up by name.
 - **USB writes below Android 9**: `bulkTransfer` silently clips a transfer to
   16384 bytes before API 28. The USBMUX writer sent 16 KiB payloads plus 36
   header bytes in one transfer, which came back short and failed the session.

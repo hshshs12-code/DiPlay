@@ -262,8 +262,17 @@ class IphoneUsbHost(
                     "out=${describeUsbEndpoint(endpoints.first)} " +
                     "in=${describeUsbEndpoint(endpoints.second)}",
             )
-            if (!connection.claimInterface(usbMux, true)) {
-                throw IphoneUsbException.DeviceUnavailable("Android could not claim USBMUX interface 1")
+            var muxClaimed = false
+            for (attempt in 1..4) {
+                muxClaimed = connection.claimInterface(usbMux, true)
+                if (muxClaimed) break
+                onDiagnostic("USB claim usbmux iface=${usbMux.id} failed attempt=$attempt " + UsbClaimDiagnostics.describe(device))
+                Thread.sleep(350)
+            }
+            if (!muxClaimed) {
+                throw IphoneUsbException.DeviceUnavailable(
+                    "Android could not claim USBMUX interface ${usbMux.id}; " + UsbClaimDiagnostics.describe(device),
+                )
             }
             claimedInterface = usbMux
             return Iap2UsbSession(connection, endpoints.first, endpoints.second, onDiagnostic)

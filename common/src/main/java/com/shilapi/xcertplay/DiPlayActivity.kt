@@ -3145,7 +3145,23 @@ class DiPlayActivity : ComponentActivity() {
             appendLine("Startup settings: openAfterBoot=${AirPlayPersistence.loadAutoStartOnBoot(appContext)} " +
                 "connectWhenOpened=${DiPlayPreferences.autoConnect(appContext)}")
             appendLine()
-            appendLine("--- Recent own-app process exits (Android 11+) ---")
+            appendLine("--- Apps on this head unit that handle USB devices (possible competitors for the iPhone) ---")
+        runCatching {
+            val attach = Intent(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            val activities = appContext.packageManager.queryIntentActivities(attach, PackageManager.GET_META_DATA)
+                .map { it.activityInfo.packageName }
+            val receivers = appContext.packageManager.queryBroadcastReceivers(attach, 0)
+                .map { it.activityInfo.packageName }
+            val known = listOf("zlink", "carbit", "autokit", "carlink", "carplay", "headunit", "hicar", "easyconn", "phonelink", "mirror", "ecarx")
+            (activities + receivers).distinct().filter { it != appContext.packageName }.forEach { pkg ->
+                val label = runCatching { appContext.packageManager.getApplicationLabel(appContext.packageManager.getApplicationInfo(pkg, 0)) }.getOrNull()
+                val flag = if (known.any { pkg.contains(it, ignoreCase = true) || label.toString().contains(it, ignoreCase = true) }) " <- likely phone-link app" else ""
+                appendLine("$pkg (${label ?: "?"})$flag")
+            }
+            if (activities.isEmpty() && receivers.isEmpty()) appendLine("none found")
+        }.onFailure { appendLine("query failed: ${it.javaClass.simpleName}") }
+        appendLine()
+        appendLine("--- Recent own-app process exits (Android 11+) ---")
             appendLine(ProcessExitDiagnostics.report(appContext))
             appendLine()
             for (name in SessionLogFile.REPORT_NAMES) {
