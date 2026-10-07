@@ -635,6 +635,12 @@ class DiPlayActivity : ComponentActivity() {
             }
             choice(card, getString(R.string.frame_rate), listOf(getString(R.string.s_30_fps_lighter_load), getString(R.string.s_60_fps_smoother_motion)), if (AirPlayPersistence.loadFps(this) == 60) 1 else 0) { AirPlayPersistence.saveFps(this, if (it == 1) 60 else 30) }
             toggle(card, getString(R.string.efficient_video), getString(R.string.use_hevc_leave_off_for_the_widest_head_unit_compatibility), AirPlayPersistence.loadHevcEnabled(this)) { AirPlayPersistence.saveHevcEnabled(this, it) }
+            toggle(card, "Phone video playback (manual parked switch)", "Offers iOS 26/27 video in car to the iPhone. Playback only unlocks while you switch \"Car is parked\" on in the in-CarPlay settings (3-finger swipe). Applies on reconnect. Use only when stopped.",
+                ManualParkedVideo.enabled(this)) { ManualParkedVideo.setEnabled(this, it) }
+            toggle(card, "Low-latency video", "Asks the decoder for low-latency mode and shows only the newest decoded frame when the unit falls behind. Applies on reconnect.",
+                AirPlayPersistence.loadLowLatencyVideo(this)) { AirPlayPersistence.saveLowLatencyVideo(this, it) }
+            toggle(card, "SurfaceView output (experimental)", "Draws video straight to the screen, skipping a compositing step. Lower latency on weak GPUs; picture adjustments are unavailable. Applies on reconnect.",
+                AirPlayPersistence.loadSurfaceViewOutput(this)) { AirPlayPersistence.saveSurfaceViewOutput(this, it) }
             toggle(card, getString(R.string.right_hand_drive), getString(R.string.place_carplay_s_controls_closer_to_the_driver), AirPlayPersistence.loadRightHandDrive(this)) { AirPlayPersistence.saveRightHandDrive(this, it) }
             carPlayDockControl(card)
             toggle(card, getString(R.string.split_screen_areas), getString(R.string.split_screen_areas_description),

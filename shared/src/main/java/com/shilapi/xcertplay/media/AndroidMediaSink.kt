@@ -172,6 +172,8 @@ class AndroidMediaSink(
     private val videoWidth: Int = 1280,
     private val videoHeight: Int = 720,
     private val preferSoftwareHevcDecoder: Boolean = false,
+    /** Legacy fork: vendor low-latency decoder hint and stale-frame dropping at the output. */
+    private val lowLatencyVideo: Boolean = false,
     private val advancedAudioChannelMapping: Boolean = false,
     private val audioFocusEnabled: Boolean = false,
     private val audioFocusAutoYield: Boolean = true,
@@ -430,6 +432,7 @@ class AndroidMediaSink(
         videoWidth,
         videoHeight,
         preferSoftwareHevcDecoder,
+        lowLatency = lowLatencyVideo,
         requestKeyFrame = { requestVideoRecovery(type) },
         report = { videoDiagnosticHandlers[type]?.invoke(it) },
         statsLabel = statsLabel,
@@ -464,8 +467,10 @@ private class VideoDecoder(
     private val requestKeyFrame: () -> Unit,
     private val report: (String) -> Unit,
     statsLabel: String? = null,
+    private val lowLatency: Boolean = false,
 ) : Closeable {
     private val queue = VideoDecodeQueue()
+    private var droppedStaleOutputs = 0L
     @Volatile private var running = true
     @Volatile private var decoder: MediaCodec? = null
     private var outputSurface: Surface? = surface
@@ -602,6 +607,13 @@ private class VideoDecoder(
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_SIZE)
                 setInteger(MediaFormat.KEY_PRIORITY, 0)
             }
+            if (lowLatency) {
+                // Vendor hints: MediaTek honours "vdec-lowlatency"; others ignore unknown keys.
+                setInteger("vdec-lowlatency", 1)
+                setInteger("vendor.low-latency.enable", 1)
+                setInteger(MediaFormat.KEY_PRIORITY, 0)
+                setInteger(MediaFormat.KEY_OPERATING_RATE, 60)
+            }
             csd.forEachIndexed { index, bytes -> setByteBuffer("csd-$index", ByteBuffer.wrap(bytes)) }
         }
 
@@ -616,7 +628,7 @@ private class VideoDecoder(
             val format = buildFormat(mime, csd, attempt.tuned)
             val codec = attempt.codecName?.let { MediaCodec.createByCodecName(it) } ?: createDecoder(mime)
             candidate = codec
-            if (attempt.tuned && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            if ((attempt.tuned || lowLatency) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 codec.codecInfo.getCapabilitiesForType(mime).isFeatureSupported("low-latency")) {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
@@ -739,25 +751,52 @@ private class VideoDecoder(
 
     private fun drainOutput(codec: MediaCodec) {
         val info = MediaCodec.BufferInfo()
+        // Low latency: when several decoded frames are waiting, only the newest is shown; the
+        // older ones would only be displayed late. A UI stream has no motion to interpolate.
+        var pending = -1
+        var pendingEos = false
+        fun flushPending(render: Boolean) {
+            if (pending < 0) return
+            codec.releaseOutputBuffer(pending, render)
+            if (render) {
+                stats.onRendered()
+                if (!renderedFrameLogged) {
+                    renderedFrameLogged = true
+                    report("first frame rendered")
+                    Log.i(TAG, "video decoder rendered first frame")
+                }
+            } else {
+                droppedStaleOutputs++
+                if (droppedStaleOutputs == 1L || droppedStaleOutputs % 500 == 0L) report("low-latency dropped stale frames total=$droppedStaleOutputs")
+            }
+            pending = -1
+        }
         while (running) {
             val index = codec.dequeueOutputBuffer(info, 0)
             when {
-                index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
+                index == MediaCodec.INFO_TRY_AGAIN_LATER -> { flushPending(outputSurface != null); return }
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> logOutputFormat(codec.outputFormat)
                 index >= 0 -> {
                     val render = outputSurface != null
-                    codec.releaseOutputBuffer(index, render)
-                    if (render) stats.onRendered()
-                    if (render && !renderedFrameLogged) {
-                        renderedFrameLogged = true
-                        report("first frame rendered")
-                        Log.i(TAG, "video decoder rendered first frame bytes=${info.size}")
+                    if (lowLatency) {
+                        flushPending(false)
+                        pending = index
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) { flushPending(render); return }
+                    } else {
+                        codec.releaseOutputBuffer(index, render)
+                        if (render) stats.onRendered()
+                        if (render && !renderedFrameLogged) {
+                            renderedFrameLogged = true
+                            report("first frame rendered")
+                            Log.i(TAG, "video decoder rendered first frame bytes=${info.size}")
+                        }
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
                     }
-                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
                 }
-                else -> return
+                else -> { flushPending(outputSurface != null); return }
             }
         }
+        flushPending(outputSurface != null)
     }
 
     private fun logOutputFormat(format: MediaFormat) {

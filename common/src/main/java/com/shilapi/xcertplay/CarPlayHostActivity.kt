@@ -1728,6 +1728,22 @@ class CarPlayHostActivity : ComponentActivity() {
             )
         }
 
+        buildAudioEffectsOverlay(content)
+        if (ManualParkedVideo.enabled(this)) {
+            content.addView(
+                settingsCategoryHeader("Phone video"),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(36) },
+            )
+            content.addView(
+                settingsSwitchRow(
+                    label = "Car is parked: allow video",
+                    checked = ManualParkedVideo.parked,
+                    description = "Only while stopped. Resets every launch. The iPhone offers the car as a video output within a few seconds.",
+                ) { ManualParkedVideo.parked = it },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) },
+            )
+        }
+
         content.addView(
             settingsCategoryHeader(getString(R.string.identity_appearance)),
             LinearLayout.LayoutParams(
@@ -2369,6 +2385,88 @@ class CarPlayHostActivity : ComponentActivity() {
             ).apply { topMargin = dp(10) },
         )
         return section
+    }
+
+    // ---- Legacy fork: equalizer inside the CarPlay settings overlay (live) ----------------------
+
+    private fun buildAudioEffectsOverlay(content: LinearLayout) {
+        var settings = com.shilapi.xcertplay.media.AudioEffectSettings.load(this)
+        fun save(next: com.shilapi.xcertplay.media.AudioEffectSettings) {
+            settings = next
+            com.shilapi.xcertplay.media.AudioEffectSettings.save(this, next)
+        }
+        content.addView(
+            settingsCategoryHeader("Equalizer and bass boost"),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(36) },
+        )
+        val sliders = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(
+            settingsSwitchRow(
+                label = "Enable audio effects",
+                checked = settings.enabled,
+                description = "Changes below apply live to playing music. Turning this on applies on the next track.",
+            ) { enabled ->
+                save(settings.copy(enabled = enabled))
+                sliders.visibility = if (enabled) View.VISIBLE else View.GONE
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) },
+        )
+        sliders.visibility = if (settings.enabled) View.VISIBLE else View.GONE
+        sliders.addView(overlaySlider("Bass boost", (0..100 step 5).toList(), (settings.bassStrength / 10 / 5) * 5, { "$it %" }) {
+            save(settings.copy(bassStrength = it * 10))
+        })
+        sliders.addView(overlaySlider("Loudness boost", (0..20).toList(), settings.loudnessGainMb / 100, { if (it == 0) "Off" else "+$it dB" }) {
+            save(settings.copy(loudnessGainMb = it * 100))
+        })
+        val info = com.shilapi.xcertplay.media.AudioEffectSettings.bandInfo()
+        val minDb = info.minLevelMb / 100
+        val maxDb = info.maxLevelMb / 100
+        val dbSteps = (minDb..maxDb).toList()
+        info.centerHz.forEachIndexed { band, hz ->
+            val title = if (hz >= 1000) "${hz / 1000} kHz" else "$hz Hz"
+            val current = (settings.bandLevelsMb.getOrElse(band) { 0 } / 100).coerceIn(minDb, maxDb)
+            sliders.addView(overlaySlider(title, dbSteps, current, { if (it > 0) "+$it dB" else "$it dB" }) { level ->
+                val levels = MutableList(maxOf(settings.bandLevelsMb.size, info.centerHz.size)) { settings.bandLevelsMb.getOrElse(it) { 0 } }
+                levels[band] = level * 100
+                save(settings.copy(bandLevelsMb = levels))
+            })
+        }
+        content.addView(sliders, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    private fun overlaySlider(
+        title: String,
+        steps: List<Int>,
+        current: Int,
+        describe: (Int) -> String,
+        onChange: (Int) -> Unit,
+    ): View {
+        val theme = com.shilapi.xcertplay.settings.SettingsTheme.OVERLAY
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        val label = TextView(this).apply { text = title; textSize = 18f; setTextColor(theme.textSecondary) }
+        val value = TextView(this).apply { text = describe(current); textSize = 22f; setTextColor(theme.accent) }
+        header.addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(value, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        container.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        val seek = android.widget.SeekBar(this).apply {
+            max = steps.lastIndex
+            progress = steps.indexOf(current).coerceIn(0, steps.lastIndex)
+            splitTrack = false
+            progressTintList = android.content.res.ColorStateList.valueOf(theme.accent)
+            thumbTintList = android.content.res.ColorStateList.valueOf(theme.accent)
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: android.widget.SeekBar, progress: Int, fromUser: Boolean) {
+                    val v = steps[progress.coerceIn(0, steps.lastIndex)]
+                    value.text = describe(v)
+                    if (fromUser) onChange(v)
+                }
+                override fun onStartTrackingTouch(bar: android.widget.SeekBar) = Unit
+                override fun onStopTrackingTouch(bar: android.widget.SeekBar) = Unit
+            })
+        }
+        container.addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+        return container
     }
 
     private fun settingsCategoryHeader(title: String): TextView =
@@ -3538,7 +3636,7 @@ class CarPlayHostActivity : ComponentActivity() {
             model = normalizedModel(),
             oemLabel = oemLabel,
             icons = listOf(loadAirPlayIcon()),
-            videoInCar = com.shilapi.xcertplay.hud.BydOutputSettings.videoWhileParkedActive(this),
+            videoInCar = com.shilapi.xcertplay.hud.BydOutputSettings.videoWhileParkedActive(this) || ManualParkedVideo.enabled(this),
             mainBufferedAudio = AirPlayPersistence.loadMainBufferedAudio(this),
         )
     }
@@ -3712,6 +3810,7 @@ class CarPlayHostActivity : ComponentActivity() {
             videoWidth = videoWidth,
             videoHeight = videoHeight,
             preferSoftwareHevcDecoder = hevcSoftwareDecoderEnabled,
+            lowLatencyVideo = AirPlayPersistence.loadLowLatencyVideo(this),
             advancedAudioChannelMapping = advancedAudioChannelMapping,
             audioFocusEnabled = AirPlayPersistence.loadAudioFocusEnabled(this),
             audioFocusAutoYield = AirPlayPersistence.loadAudioFocusAutoYield(this),
@@ -4547,8 +4646,9 @@ class CarPlayHostActivity : ComponentActivity() {
                 if (!texture.isAttachedToWindow) return true
                 removeVideoSurfaceProbe()
                 if (isDestroyed || videoView !== texture) return true
-                val mode = carPlayVideoSurfaceMode(texture.isHardwareAccelerated)
-                appendLog("Video output mode=$mode windowHardwareAccelerated=${texture.isHardwareAccelerated}")
+                val forceSurfaceView = AirPlayPersistence.loadSurfaceViewOutput(this@CarPlayHostActivity)
+                val mode = if (forceSurfaceView) CarPlayVideoSurfaceMode.SURFACE else carPlayVideoSurfaceMode(texture.isHardwareAccelerated)
+                appendLog("Video output mode=$mode windowHardwareAccelerated=${texture.isHardwareAccelerated} forcedSurfaceView=$forceSurfaceView")
                 if (mode == CarPlayVideoSurfaceMode.TEXTURE) return true
                 useFallbackVideoSurface(texture)
                 return false // Measure the replacement before drawing the software window.

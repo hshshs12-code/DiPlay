@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.9)
+## Fork features (0.2.13-legacy24.10)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,18 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Equalizer inside CarPlay**: the in-session settings overlay (three-finger
+  swipe down) carries the same equalizer, bass boost and loudness sliders,
+  applied live.
+- **Video latency** (Display and performance): "Low-latency video" (default
+  on) sets the MediaTek `vdec-lowlatency` hint, operating rate and priority on
+  the decoder and shows only the newest decoded frame when several are
+  waiting; "SurfaceView output" (default off) replaces the TextureView with a
+  SurfaceView to skip a compositing step. Both apply on reconnect.
+- **Phone video with a manual parked switch**: "Phone video playback" offers
+  iOS video in car to the iPhone on units without vehicle data; playback is
+  only allowed while "Car is parked: allow video" is on in the in-CarPlay
+  settings. That switch is never persisted and is off at every launch.
 - **Upload diagnostic report** (Settings → Diagnostics): posts the same report
   that Save produces to dpaste.com as an unlisted page that expires after
   7 days and shows a short link (dpaste.com/XXXXXX) to read off the screen.

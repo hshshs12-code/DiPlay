@@ -54,7 +54,12 @@ internal object CarPlayVideo : CarPlayVideoListener {
         next.videoListener = this
     }
 
-    override fun readParked(): Boolean? = appContext?.let(BydNavigationOutputs::parked)
+    override fun readParked(): Boolean? {
+        val context = appContext ?: return null
+        // Legacy fork: head units without vehicle data use the driver's manual parked switch.
+        if (ManualParkedVideo.enabled(context)) return ManualParkedVideo.parked
+        return BydNavigationOutputs.parked(context)
+    }
 
     override fun onVideoAllowedChanged(allowed: Boolean) {
         if (!allowed) main.post { closePlayer("the car left P") }
