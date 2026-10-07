@@ -244,10 +244,10 @@ class IphoneUsbHost(
                 ?: throw IphoneUsbException.Protocol(
                     "Re-enumerated iPhone exposes no USBMUX CarPlay configuration",
                 )
-            if (!connection.setConfiguration(configuration)) {
-                Log.w(
-                    IphoneCarPlayConfiguration.TAG,
-                    "setConfiguration ${configuration.id} reported failure; claiming anyway",
+            if (!UsbConfigurationControl.ensureConfiguration(device, connection, configuration, onDiagnostic)) {
+                throw IphoneUsbException.DeviceUnavailable(
+                    "iPhone could not be switched to CarPlay configuration ${configuration.id}; " +
+                        UsbClaimDiagnostics.describe(device),
                 )
             }
             val usbMux = IphoneCarPlayConfiguration.usbMuxInterface(configuration)

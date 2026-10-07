@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.5)
+## Fork features (0.2.13-legacy24.6)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -55,6 +55,16 @@ Runtime guards for APIs newer than 24:
   that Save produces to dpaste.com as an unlisted page that expires after
   7 days and shows a short link (dpaste.com/XXXXXX) to read off the screen.
   Reports over ~900 KB keep the header and the newest log lines.
+- **CarPlay configuration enforcement** (`UsbConfigurationControl`): a
+  MediaTek ac8227l unit puts the re-enumerated iPhone into its USB-audio
+  configuration and binds snd-usb-audio/usbhid to it (iPod mode). Linux refuses
+  SET_CONFIGURATION from usbfs while any interface is claimed, so the CarPlay
+  configuration was never active and the NCM claim targeted a non-existent
+  interface. DiPlay now reads the active configuration (GET_CONFIGURATION),
+  detaches the kernel drivers from every interface of it with a forced
+  claim/release, selects the CarPlay configuration, verifies it, and fails
+  with the reason instead of "claiming anyway". The NCM open re-checks the
+  active configuration on its own connection.
 - **USB conflicts** (Settings → USB conflicts): lists the other apps on the
   head unit that handle USB devices or look like phone-link apps. Per app:
   stop before every USB connect (kills its background processes, and

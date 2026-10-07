@@ -1866,6 +1866,14 @@ class CarPlayController(
         )
         val connection = requireUsbManager().openDevice(device)
             ?: throw IphoneUsbException.DeviceUnavailable("Could not open the iPhone NCM connection")
+        val active = com.shilapi.xcertplay.transport.UsbConfigurationControl.activeConfiguration(connection)
+        connectionDiagnostic("USB NCM open active configuration=${active ?: "unknown"} expected=${configuration.id}")
+        if (active != null && active != configuration.id) {
+            connection.close()
+            throw IphoneUsbException.DeviceUnavailable(
+                "iPhone left CarPlay configuration ${configuration.id} (active=$active) before the NCM open",
+            )
+        }
         return NcmUsbBridge.open(connection, function, onDiagnostic = ::connectionDiagnostic, device = device)
     }
 
