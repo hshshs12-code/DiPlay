@@ -609,17 +609,22 @@ class CarPlayMediaEngine(
     }
 }
 
+/** Long/Integer.toUnsignedString are API 26; masking gives the same digits on every release. */
+private val UNSIGNED_LONG_MASK: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+private fun unsignedLongDecimal(value: Long): String = BigInteger.valueOf(value).and(UNSIGNED_LONG_MASK).toString()
+private fun unsignedIntDecimal(value: Int): String = (value.toLong() and 0xffffffffL).toString()
+
 internal fun unsignedPlistDecimal(value: Any?): String? = when (value) {
-    is Long -> java.lang.Long.toUnsignedString(value)
-    is Int -> Integer.toUnsignedString(value)
+    is Long -> unsignedLongDecimal(value)
+    is Int -> unsignedIntDecimal(value)
     is Short -> (value.toInt() and 0xffff).toString()
     is Byte -> (value.toInt() and 0xff).toString()
     is BigInteger -> if (value.signum() >= 0) value.toString() else null
-    else -> (value as? Number)?.toLong()?.let(java.lang.Long::toUnsignedString)
+    else -> (value as? Number)?.toLong()?.let(::unsignedLongDecimal)
 }
 
 internal fun unsignedPlistInteger(value: Any?): Any = when (value) {
-    is Long -> if (value < 0) BigInteger(java.lang.Long.toUnsignedString(value)) else value
-    is Int -> if (value < 0) BigInteger(Integer.toUnsignedString(value)) else value
+    is Long -> if (value < 0) BigInteger(unsignedLongDecimal(value)) else value
+    is Int -> if (value < 0) BigInteger(unsignedIntDecimal(value)) else value
     else -> value ?: 0L
 }

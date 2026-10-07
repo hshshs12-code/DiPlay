@@ -67,16 +67,33 @@ class WifiP2pLegacyGroupManagerTest {
         assertNull(memory.getString("confirmed", null))
     }
 
-    @Test fun automaticStartPinsFiveGhzAndKeepsItsChannelUnknownWhenTheFrameworkRefuses() {
+    // The iPhone rejects a Wi-Fi configuration that says channel 0, so a refused pin reports
+    // the channel the group owner normally shares: the station channel (5180 MHz = 36 here).
+    @Test fun automaticStartPinsFiveGhzAndReportsTheStationChannelWhenTheFrameworkRefuses() {
         radio.rejectChannels = true
         val logs = mutableListOf<String>()
         WifiP2pGroupManager(context, logs::add).use { manager ->
             val info = background { manager.start(8000) }
             assertEquals(1, radio.systemCreations)
+            assertEquals(36, info.channel)
+            assertEquals(5180, info.frequencyMHz)
+            assertEquals("5 GHz", info.bandLabel)
+            assertTrue(logs.any { it.contains("legacy channel rejected code=") })
+            assertTrue(logs.any { it.contains("legacy channel observed frequencyMHz=5180 channel=36") })
+        }
+    }
+
+    @Test fun automaticStartKeepsItsChannelUnknownWithoutAStationOrScanResult() {
+        radio.rejectChannels = true
+        val wifi = context.getSystemService(WifiManager::class.java)
+        shadowOf(wifi.connectionInfo).setFrequency(-1)
+        val logs = mutableListOf<String>()
+        WifiP2pGroupManager(context, logs::add).use { manager ->
+            val info = background { manager.start(8000) }
             assertEquals(0, info.channel)
             assertNull(info.frequencyMHz)
             assertEquals("Auto", info.bandLabel)
-            assertTrue(logs.any { it.contains("legacy channel rejected code=") })
+            assertTrue(logs.any { it.contains("legacy channel unknown") })
         }
     }
 
@@ -93,7 +110,8 @@ class WifiP2pLegacyGroupManagerTest {
     @Test fun defaultRetryClearsTheSuccessfulPinFromRejectedCreations() {
         radio.rejectPinnedCreation = true
         WifiP2pGroupManager(context).use { manager ->
-            assertEquals(0, background { manager.start(8000) }.channel)
+            // No pin survives, so the reported channel is the observed station channel.
+            assertEquals(36, background { manager.start(8000) }.channel)
             assertEquals(0, radio.operatingChannel)
             assertEquals(0, radio.channelRequests.last())
         }

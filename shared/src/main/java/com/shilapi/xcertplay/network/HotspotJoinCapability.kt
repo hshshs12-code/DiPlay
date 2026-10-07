@@ -58,7 +58,7 @@ internal object HotspotJoinCapability {
                     try {
                         data.enforceInterface(DESCRIPTOR)
                         val capability = data.readTypedObject(creator) ?: return true
-                        data.enforceNoDataAvail()
+                        if (android.os.Build.VERSION.SDK_INT >= 33) data.enforceNoDataAvail()
                         val supported = capabilityType.getMethod("areFeaturesSupported", Long::class.javaPrimitiveType)
                             .invoke(capability, feature) == true
                         val channels = capabilityType.getMethod("getSupportedChannelList", Int::class.javaPrimitiveType)

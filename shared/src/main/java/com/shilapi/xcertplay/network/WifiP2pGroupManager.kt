@@ -318,7 +318,7 @@ class WifiP2pGroupManager(
         }
         synchronized(legacyChannelLock) {
             if (activeChannel != null) releaseLegacyChannelRestriction(activeChannel)
-            activeChannel?.close()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) activeChannel?.close() // Channel.close() is API 27
         }
         activeThread?.quitSafely()
     }
@@ -508,18 +508,21 @@ class WifiP2pGroupManager(
             val passphrase = group.passphrase?.takeIf { it.isNotBlank() }
                 ?: credentials?.passphrase
             val interfaceName = group.getInterface()?.takeIf { it.isNotBlank() }
-            val frequencyMHz = group.frequency
-            val channelNumber = wifiFrequencyMhzToChannel(frequencyMHz)
-            if (
-                networkName == null || passphrase == null ||
-                interfaceName == null ||
-                frequencyMHz <= 0 ||
-                channelNumber == null
-            ) {
+            // WifiP2pGroup.getFrequency() is API 29. Older releases fall back to a scan result for
+            // the group's own SSID, then the station channel, then 0 (the iPhone scans for the AP).
+            val platformReportsChannel = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+            val frequencyMHz = if (platformReportsChannel) group.frequency else fallbackGroupFrequencyMHz(networkName)
+            if (networkName == null || passphrase == null || interfaceName == null) {
+                lastReason = "incomplete group details frequencyMHz=$frequencyMHz"
+                continue
+            }
+            val channelNumber = if (frequencyMHz > 0) wifiFrequencyMhzToChannel(frequencyMHz) else 0
+            if (channelNumber == null || (platformReportsChannel && frequencyMHz <= 0)) {
                 lastReason = "incomplete group details frequencyMHz=$frequencyMHz"
                 continue
             }
             val band = when {
+                frequencyMHz <= 0 -> "unknown"
                 is5Ghz(frequencyMHz) -> "5 GHz"
                 frequencyMHz in 2412..2484 -> "2.4 GHz"
                 else -> throw IOException("Wi-Fi P2P returned an unsupported band at ${frequencyMHz}MHz")
@@ -600,20 +603,35 @@ class WifiP2pGroupManager(
                 continue
             }
 
-            val requestedChannel = creation.frequencyMHz
+            // Below API 29 the platform never reports the group channel. The iPhone rejects a
+            // Wi-Fi configuration that says channel 0, so when no channel was pinned, read the
+            // live channel from a scan of the group's own SSID or fall back to the station channel.
+            var requestedChannel = creation.frequencyMHz
                 ?.let(WifiP2pLegacyChannels::operatingChannelFor) ?: UNKNOWN_CHANNEL
+            var reportedFrequencyMHz = creation.frequencyMHz
+            if (requestedChannel == UNKNOWN_CHANNEL) {
+                val observed = fallbackGroupFrequencyMHz(networkName)
+                val observedChannel = if (observed > 0) wifiFrequencyMhzToChannel(observed) else null
+                if (observedChannel != null) {
+                    requestedChannel = observedChannel
+                    reportedFrequencyMHz = observed
+                    diagnostic("Wi-Fi P2P legacy channel observed frequencyMHz=$observed channel=$observedChannel")
+                } else {
+                    diagnostic("Wi-Fi P2P legacy channel unknown; the iPhone must scan for the group")
+                }
+            }
             return WirelessHotspotInfo(
                 ssid = networkName,
                 passphrase = passphrase,
                 security = groupSecurity(group),
                 channel = requestedChannel,
-                frequencyMHz = creation.frequencyMHz,
+                frequencyMHz = reportedFrequencyMHz,
                 bssid = interfaceHardwareAddress(interfaceName)
                     ?: group.owner?.deviceAddress?.takeIf { it.isNotBlank() },
                 interfaceName = interfaceName,
                 hostAddress = hostAddress,
                 bandLabel = if (requestedChannel == UNKNOWN_CHANNEL) "Auto"
-                    else WifiP2pLegacyChannels.bandLabelFor(requestedChannel),
+                    else runCatching { WifiP2pLegacyChannels.bandLabelFor(requestedChannel) }.getOrDefault("Auto"),
                 backend = WirelessHotspotBackend.WIFI_P2P,
             )
         }
@@ -623,6 +641,24 @@ class WifiP2pGroupManager(
     // can belong to a different group, so missing exact group identity must fail closed.
     private fun legacyGroupInterface(group: WifiP2pGroup): String? =
         runCatching { group.getInterface()?.takeIf { it.isNotBlank() } }.getOrNull()
+
+    /**
+     * Android 7 through 9 never expose the group channel through a public API. A cached scan result
+     * for the group's own SSID is exact when present; otherwise the station channel is the best
+     * answer because AOSP normally places the group owner on it. 0 makes the iPhone scan instead.
+     */
+    private fun fallbackGroupFrequencyMHz(groupSsid: String?): Int {
+        val wifi = runCatching { appContext.getSystemService(WifiManager::class.java) }.getOrNull()
+        val scanned = runCatching {
+            @Suppress("DEPRECATION")
+            wifi?.scanResults?.firstOrNull { it.SSID == groupSsid && it.frequency > 0 }?.frequency
+        }.getOrNull()
+        if (scanned != null && wifiFrequencyMhzToChannel(scanned) != null) return scanned
+        return runCatching {
+            @Suppress("DEPRECATION")
+            wifi?.connectionInfo?.frequency?.takeIf { wifiFrequencyMhzToChannel(it) != null }
+        }.getOrNull() ?: 0
+    }
 
     private fun requestGroupInfo(
         attempt: StartAttempt,
@@ -719,9 +755,10 @@ class WifiP2pGroupManager(
         val wifi = appContext.getSystemService(WifiManager::class.java)
         val fiveGhzSupported = runCatching { wifi?.is5GHzBandSupported }.getOrNull()
         val wifiEnabled = runCatching { wifi?.isWifiEnabled }.getOrNull()
-        val locationEnabled = runCatching {
+        // LocationManager.isLocationEnabled is API 28; it is diagnostic only.
+        val locationEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) runCatching {
             appContext.getSystemService(LocationManager::class.java)?.isLocationEnabled
-        }.getOrNull()
+        }.getOrNull() else null
         val required = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES
             else Manifest.permission.ACCESS_FINE_LOCATION
         val granted = appContext.checkSelfPermission(required) == PackageManager.PERMISSION_GRANTED
@@ -827,7 +864,7 @@ class WifiP2pGroupManager(
         }
         synchronized(legacyChannelLock) {
             if (failedChannel != null) releaseLegacyChannelRestriction(failedChannel)
-            failedChannel?.close()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) failedChannel?.close() // Channel.close() is API 27
         }
         failedThread?.quitSafely()
     }

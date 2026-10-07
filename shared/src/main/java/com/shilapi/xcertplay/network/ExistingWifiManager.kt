@@ -115,7 +115,12 @@ class ExistingWifiManager(
                     hosts = addresses
                     interfaceIndex = iface.index
                     interfaceName = name
-                    connectivity.registerNetworkCallback(NetworkRequest.Builder().clearCapabilities()
+                    // clearCapabilities is API 30; older releases drop the default INTERNET
+                    // requirement so a LAN without internet still matches.
+                    val requestBuilder = NetworkRequest.Builder()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) requestBuilder.clearCapabilities()
+                    else requestBuilder.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    connectivity.registerNetworkCallback(requestBuilder
                         .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                         .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), callback)
                     callbackRegistered = true
