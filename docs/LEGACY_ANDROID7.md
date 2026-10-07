@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.2)
+## Fork features (0.2.13-legacy24.3)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,10 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Upload diagnostic report** (Settings → Diagnostics): posts the same report
+  that Save produces to dpaste.com as an unlisted page that expires after
+  7 days and shows a short link (dpaste.com/XXXXXX) to read off the screen.
+  Reports over ~900 KB keep the header and the newest log lines.
 - **USB writes below Android 9**: `bulkTransfer` silently clips a transfer to
   16384 bytes before API 28. The USBMUX writer sent 16 KiB payloads plus 36
   header bytes in one transfer, which came back short and failed the session.
