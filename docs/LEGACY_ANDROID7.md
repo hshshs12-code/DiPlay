@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.10)
+## Fork features (0.2.13-legacy24.11)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,23 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **12-band software equalizer** (`EqualizerDsp`): optional mode next to the
+  device's own effect. Twelve peaking biquads (31 Hz to 16 kHz, ±12 dB, Q 1.1)
+  on the decoded PCM before the AudioTrack write, bands at 0 dB skipped, with
+  an optional soft limiter (knee 0.8, ceiling 0.985; off by default). About
+  1.2 M filter steps per second at 48 kHz stereo. Presets (24, iOS-style) are
+  defined on the 12 bands and interpolated onto the device bands in device
+  mode. Horizontal drag-to-set band view (`EqualizerBandsView`) shared by the
+  settings page and the overlay (`EqualizerPanel`). Unit-tested for flat
+  passthrough, measured +6 dB boost, far-band isolation and limiter headroom.
+- **Simple home screen** (default on, Settings → Home screen and launch): big
+  tiles for Connect USB, Connect wireless, Choose iPhone, Equalizer, Settings
+  and Disconnect, plus an Equalizer page.
+- **Auto-launch on USB plug-in** (default on): when Android hands the iPhone
+  to DiPlay (default handler), the session activity starts wired at once, app
+  closed or not; off makes that launch exit quietly.
+- **Parked switch persisted**: "Car is parked: allow video" keeps its state at
+  the user's request.
 - **Equalizer inside CarPlay**: the in-session settings overlay (three-finger
   swipe down) carries the same equalizer, bass boost and loudness sliders,
   applied live.
@@ -62,7 +79,7 @@ Runtime guards for APIs newer than 24:
 - **Phone video with a manual parked switch**: "Phone video playback" offers
   iOS video in car to the iPhone on units without vehicle data; playback is
   only allowed while "Car is parked: allow video" is on in the in-CarPlay
-  settings. That switch is never persisted and is off at every launch.
+  settings. That switch is persisted (24.11).
 - **Upload diagnostic report** (Settings → Diagnostics): posts the same report
   that Save produces to dpaste.com as an unlisted page that expires after
   7 days and shows a short link (dpaste.com/XXXXXX) to read off the screen.

@@ -25,7 +25,9 @@ class AudioEffectController private constructor(private val sessionId: Int) : Cl
                 loudness?.enabled = false
                 return
             }
-            try {
+            if (settings.dspMode) {
+                equalizer?.enabled = false
+            } else try {
                 val eq = equalizer ?: Equalizer(PRIORITY, sessionId).also { equalizer = it }
                 val range = eq.bandLevelRange
                 for (band in 0 until eq.numberOfBands.toInt()) {

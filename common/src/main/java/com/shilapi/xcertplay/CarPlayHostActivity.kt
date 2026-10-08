@@ -542,7 +542,13 @@ class CarPlayHostActivity : ComponentActivity() {
         MapMirrors.sink = mirrorSink
         MapMirrors.onChanged = mirrorsChanged
         languagePreferenceAtCreate = AppLocale.preference(this)
+        ManualParkedVideo.bind(this)
         if (isIphoneUsbAttachment(intent)) {
+            if (!AirPlayPersistence.loadUsbAutoLaunch(this) && !CarPlayBackgroundSession.hasSession()) {
+                // Launched by Android for the plugged-in iPhone, but auto-launch is off: go away quietly.
+                finish()
+                return
+            }
             AirPlayPersistence.saveWirelessEnabled(this, false)
         }
         if (runCatching { DiPlayBootstrap.ensure(this, AirPlayPersistence.loadMfiTarget(this)) }.isFailure) {
@@ -1738,7 +1744,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 settingsSwitchRow(
                     label = "Car is parked: allow video",
                     checked = ManualParkedVideo.parked,
-                    description = "Only while stopped. Resets every launch. The iPhone offers the car as a video output within a few seconds.",
+                    description = "Only while stopped. Stays as you set it. The iPhone offers the car as a video output within a few seconds.",
                 ) { ManualParkedVideo.parked = it },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) },
             )
@@ -2390,48 +2396,25 @@ class CarPlayHostActivity : ComponentActivity() {
     // ---- Legacy fork: equalizer inside the CarPlay settings overlay (live) ----------------------
 
     private fun buildAudioEffectsOverlay(content: LinearLayout) {
-        var settings = com.shilapi.xcertplay.media.AudioEffectSettings.load(this)
-        fun save(next: com.shilapi.xcertplay.media.AudioEffectSettings) {
-            settings = next
-            com.shilapi.xcertplay.media.AudioEffectSettings.save(this, next)
-        }
         content.addView(
             settingsCategoryHeader("Equalizer and bass boost"),
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(36) },
         )
-        val sliders = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(
-            settingsSwitchRow(
-                label = "Enable audio effects",
-                checked = settings.enabled,
-                description = "Changes below apply live to playing music. Turning this on applies on the next track.",
-            ) { enabled ->
-                save(settings.copy(enabled = enabled))
-                sliders.visibility = if (enabled) View.VISIBLE else View.GONE
+        val theme = com.shilapi.xcertplay.settings.SettingsTheme.OVERLAY
+        val panel = com.shilapi.xcertplay.settings.EqualizerPanel(
+            this, theme.accent, theme.textPrimary, theme.textSecondary,
+            sliderFactory = { title, steps, current, describe, onChange -> overlaySlider(title, steps, current, describe, onChange) },
+            switchFactory = { label, checked, description, onChanged ->
+                settingsSwitchRow(label = label, checked = checked, description = description, onChanged = onChanged)
             },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) },
+            buttonFactory = { title, onClick ->
+                android.widget.Button(this).apply {
+                    text = title; isAllCaps = false; textSize = 16f; setTextColor(theme.buttonText)
+                    setOnClickListener { onClick() }
+                }
+            },
         )
-        sliders.visibility = if (settings.enabled) View.VISIBLE else View.GONE
-        sliders.addView(overlaySlider("Bass boost", (0..100 step 5).toList(), (settings.bassStrength / 10 / 5) * 5, { "$it %" }) {
-            save(settings.copy(bassStrength = it * 10))
-        })
-        sliders.addView(overlaySlider("Loudness boost", (0..20).toList(), settings.loudnessGainMb / 100, { if (it == 0) "Off" else "+$it dB" }) {
-            save(settings.copy(loudnessGainMb = it * 100))
-        })
-        val info = com.shilapi.xcertplay.media.AudioEffectSettings.bandInfo()
-        val minDb = info.minLevelMb / 100
-        val maxDb = info.maxLevelMb / 100
-        val dbSteps = (minDb..maxDb).toList()
-        info.centerHz.forEachIndexed { band, hz ->
-            val title = if (hz >= 1000) "${hz / 1000} kHz" else "$hz Hz"
-            val current = (settings.bandLevelsMb.getOrElse(band) { 0 } / 100).coerceIn(minDb, maxDb)
-            sliders.addView(overlaySlider(title, dbSteps, current, { if (it > 0) "+$it dB" else "$it dB" }) { level ->
-                val levels = MutableList(maxOf(settings.bandLevelsMb.size, info.centerHz.size)) { settings.bandLevelsMb.getOrElse(it) { 0 } }
-                levels[band] = level * 100
-                save(settings.copy(bandLevelsMb = levels))
-            })
-        }
-        content.addView(sliders, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(panel.build(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
     }
 
     private fun overlaySlider(

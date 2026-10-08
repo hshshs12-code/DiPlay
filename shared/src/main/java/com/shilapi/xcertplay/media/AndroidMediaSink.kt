@@ -887,6 +887,7 @@ private class AudioRenderer(
     private var codec: MediaCodec? = null
     private var track: AudioTrack? = null
     private var effects: AudioEffectController? = null
+    private var eqDsp: EqualizerDsp? = null
     private var pcm = ByteArray(64 * 1024)
     private var playbackStarted = false
     private var prebufferBytes = 0
@@ -1106,6 +1107,14 @@ private class AudioRenderer(
                 AudioEffectController.attach(built.audioSessionId, AudioEffectSettings.current(null))
             }.onFailure { Log.w(TAG, "audio effects unavailable", it) }.getOrNull()
             effects?.let { runCatching { report("Audio: ${it.describe()}") } }
+            val fx = AudioEffectSettings.current(null)
+            if (fx.enabled && fx.dspMode) {
+                eqDsp = EqualizerDsp(format.sampleRate, format.channels).also {
+                    it.configure(fx.dspGainsDb(), fx.limiter)
+                    it.register()
+                }
+                runCatching { report("Audio: 12-band equalizer active rate=${format.sampleRate} channels=${format.channels} limiter=${fx.limiter}") }
+            }
         }
         diagnosticStage = "track-attributes"
         trackAttributes = audioTrackAttributesForFocus(built, attributes)
@@ -1416,6 +1425,7 @@ private class AudioRenderer(
             applyFadeIn(data, offset, length)
             fadeApplied = true
         }
+        eqDsp?.process(data, offset, length)
         var written = 0
         while (written < length && running) {
             val writeLength = if (playbackStarted) {
@@ -1578,6 +1588,8 @@ private class AudioRenderer(
         this.track = null
         runCatching { effects?.close() }
         effects = null
+        eqDsp?.unregister()
+        eqDsp = null
         if (track != null) {
             try {
                 track.pause()

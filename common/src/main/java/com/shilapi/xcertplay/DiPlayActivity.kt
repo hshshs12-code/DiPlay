@@ -204,6 +204,7 @@ class DiPlayActivity : ComponentActivity() {
         }
         pendingCarHotspotSetup = savedInstanceState?.getBoolean("pending_car_hotspot") ?: false
         bydVehicleAdvancedExpanded = savedInstanceState?.getBoolean("byd_vehicle_advanced") ?: false
+        ManualParkedVideo.bind(this)
         page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: "home"
         render()
         scheduleAutomaticVehicleValidation()
@@ -347,6 +348,12 @@ class DiPlayActivity : ComponentActivity() {
         }
         content.addView(header)
         content.addView(space(if (compact) 8 else 24))
+        if (page == "eq") {
+            content.addView(label("Equalizer", 30, TEXT, true).apply { setPadding(0, 0, 0, dp(12)) })
+            section(content, "Equalizer and bass boost", R.drawable.ic_dp_audio) { card -> audioEffectsSection(card) }
+            content.addView(button("Back", false) { page = "home"; render() }, matchButton(12, 56))
+            return
+        }
         when (page) {
             "connection" -> connectionSetup(content)
             "settings" -> settings(content)
@@ -369,7 +376,55 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
 
+    // ---- Legacy fork: simple home screen ------------------------------------------------------
+    private fun simpleHome(content: LinearLayout) {
+        val wide = resources.configuration.screenWidthDp >= 700
+        status = label(getString(R.string.ready_when_you_are), 20, TEXT, true).apply { setPadding(0, 0, 0, dp(12)) }
+        content.addView(status)
+        setupError?.let { content.addView(label(it, 14, WARNING).apply { setPadding(0, 0, 0, dp(8)) }) }
+        fun tile(title: String, subtitle: String, primary: Boolean, click: () -> Unit): View {
+            val holder = column().apply {
+                background = rounded(if (primary) ACCENT else SURFACE, BORDER)
+                setPadding(dp(18), dp(16), dp(18), dp(16))
+                isClickable = true; isFocusable = true
+                setOnClickListener { click() }
+            }
+            holder.addView(label(title, 22, if (primary) BG else TEXT, true))
+            holder.addView(label(subtitle, 13, if (primary) BG else MUTED).apply { setPadding(0, dp(4), 0, 0) })
+            return holder
+        }
+        val tiles = mutableListOf<View>()
+        val sessionActive = CarPlayBackgroundSession.hasSession()
+        tiles += tile(if (sessionActive) "Open CarPlay" else "Connect USB", if (sessionActive) "Session running" else "Plug the iPhone in first", true) {
+            if (sessionActive) openProjection() else connect(false)
+        }
+        tiles += tile("Connect wireless", when (AirPlayPersistence.loadWirelessHotspotMode(this)) {
+            WirelessHotspotMode.EXISTING_WIFI -> "Same Wi-Fi / LAN"
+            WirelessHotspotMode.MANUAL -> "Car hotspot"
+            else -> "Wi-Fi Direct"
+        }, false) { if (sessionActive) openProjection() else connect(true) }
+        tiles += tile("Choose iPhone", "Wireless: ${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }
+        tiles += tile("Equalizer", "EQ, bass boost, loudness", false) { page = "eq"; render() }
+        tiles += tile("Settings", "Display, audio, USB, updates", false) { page = "settings"; render() }
+        if (sessionActive) tiles += tile("Disconnect", "End the CarPlay session", false) {
+            CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus(); render() } }
+        }
+        val columns = if (wide) 3 else 2
+        var rowView: LinearLayout? = null
+        tiles.forEachIndexed { index, tile ->
+            if (index % columns == 0) {
+                rowView = row().apply { setPadding(0, 0, 0, dp(10)) }
+                content.addView(rowView)
+            }
+            rowView!!.addView(tile, LinearLayout.LayoutParams(0, dp(104), 1f).apply { if (index % columns != columns - 1) rightMargin = dp(10) })
+        }
+        val remainder = tiles.size % columns
+        if (remainder != 0) repeat(columns - remainder) { rowView!!.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f).apply { rightMargin = dp(10) }) }
+        content.addView(label("${getString(R.string.home_public_preview)}${version()} · 3-finger swipe down in CarPlay opens live settings", 12, MUTED).apply { setPadding(0, dp(6), 0, 0) })
+    }
+
     private fun home(content: LinearLayout) {
+        if (AirPlayPersistence.loadSimpleHome(this)) { simpleHome(content); return }
         val compact = isCompactLayout
         if (compact) {
             val card = card().apply { setPadding(dp(12), dp(10), dp(12), dp(10)) }
@@ -564,6 +619,15 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button("${getString(R.string.choose_iphone_prefix)}${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }, matchButton(12, 60))
         }
         bydAdbSettings(content)
+        section(content, "Home screen and launch", R.drawable.ic_dp_automation) { card ->
+            toggle(card, "Simple home screen", "Big tiles: Connect USB, Connect wireless, Choose iPhone, Equalizer, Settings.", AirPlayPersistence.loadSimpleHome(this)) {
+                AirPlayPersistence.saveSimpleHome(this, it)
+            }
+            toggle(card, "Auto-launch on USB plug-in", "When Android hands the iPhone to DiPlay (pick DiPlay with \"Use by default\" once), CarPlay starts immediately, even with the app closed.", AirPlayPersistence.loadUsbAutoLaunch(this)) {
+                AirPlayPersistence.saveUsbAutoLaunch(this, it)
+            }
+            card.addView(label("Tip: USB conflicts → \"Make DiPlay the default for the iPhone\" opens the prompt with the Use by default checkbox.", 13, MUTED).apply { setPadding(0, dp(8), 0, 0) })
+        }
         section(content, "USB conflicts", R.drawable.ic_dp_connection) { card -> usbCompetitorsSection(card) }
         section(content, "Updates", R.drawable.ic_dp_about) { card -> updateSection(card) }
         section(content, "Equalizer and bass boost", R.drawable.ic_dp_audio) { card -> audioEffectsSection(card) }
@@ -3576,54 +3640,22 @@ class DiPlayActivity : ComponentActivity() {
     // ---- Legacy fork: equalizer, bass boost, loudness ---------------------------------------
 
     private fun audioEffectsSection(card: LinearLayout) {
-        var settings = com.shilapi.xcertplay.media.AudioEffectSettings.load(this)
-        val controls = column()
-        fun save(next: com.shilapi.xcertplay.media.AudioEffectSettings) {
-            settings = next
-            com.shilapi.xcertplay.media.AudioEffectSettings.save(this, next)
-        }
-        toggle(card, "Enable audio effects", "Equalizer, bass boost and loudness apply to CarPlay music. Takes effect on the next song or reconnect; changes below apply live.",
-            settings.enabled) { enabled ->
-            save(settings.copy(enabled = enabled))
-            controls.visibility = if (enabled) View.VISIBLE else View.GONE
-        }
-        controls.visibility = if (settings.enabled) View.VISIBLE else View.GONE
-        val bassSteps = (0..100 step 5).toList()
-        controls.addView(overlaySliderRow("Bass boost", bassSteps, (settings.bassStrength / 10 / 5) * 5) { "$it %" }.apply {
-            onSave = { save(settings.copy(bassStrength = it * 10)) }
-        })
-        val loudSteps = (0..20).toList()
-        controls.addView(overlaySliderRow("Loudness boost", loudSteps, settings.loudnessGainMb / 100) {
-            if (it == 0) "Off" else "+$it dB"
-        }.apply {
-            onSave = { save(settings.copy(loudnessGainMb = it * 100)) }
-        })
-        controls.addView(label("Loudness boost raises quiet sources; too much distorts. Equalizer bands in dB:", 14, MUTED).apply {
+        val panel = com.shilapi.xcertplay.settings.EqualizerPanel(
+            this, ACCENT, TEXT, MUTED,
+            sliderFactory = { title, steps, current, describe, onChange ->
+                overlaySliderRow(title, steps, current, describe).apply { onSave = onChange }
+            },
+            switchFactory = { label, checked, description, onChanged ->
+                val holder = column()
+                toggle(holder, label, description, checked) { onChanged(it) }
+                holder
+            },
+            buttonFactory = { title, onClick -> button(title, false) { onClick() } },
+        )
+        card.addView(panel.build())
+        card.addView(label("Audio quality: CarPlay sends what the iPhone negotiates (AAC-LC or 16-bit PCM at 44.1/48 kHz). The receiver cannot raise it.", 13, MUTED).apply {
             setPadding(0, dp(12), 0, 0)
         })
-        val info = com.shilapi.xcertplay.media.AudioEffectSettings.bandInfo()
-        val minDb = info.minLevelMb / 100
-        val maxDb = info.maxLevelMb / 100
-        val dbSteps = (minDb..maxDb).toList()
-        info.centerHz.forEachIndexed { band, hz ->
-            val title = if (hz >= 1000) "${hz / 1000} kHz" else "$hz Hz"
-            val current = (settings.bandLevelsMb.getOrElse(band) { 0 } / 100).coerceIn(minDb, maxDb)
-            controls.addView(overlaySliderRow(title, dbSteps, current) { if (it > 0) "+$it dB" else "$it dB" }.apply {
-                onSave = { level ->
-                    val levels = MutableList(maxOf(settings.bandLevelsMb.size, info.centerHz.size)) { settings.bandLevelsMb.getOrElse(it) { 0 } }
-                    levels[band] = level * 100
-                    save(settings.copy(bandLevelsMb = levels))
-                }
-            })
-        }
-        controls.addView(button("Reset equalizer", false) {
-            save(settings.copy(bandLevelsMb = List(info.centerHz.size) { 0 }, bassStrength = 0, loudnessGainMb = 0))
-            render()
-        }, matchButton(12, 56))
-        controls.addView(label("Audio quality: CarPlay sends what the iPhone negotiates (AAC-LC or 16-bit PCM at 44.1/48 kHz). The receiver cannot raise it; the music buffer under Display and performance trades latency for stability.", 14, MUTED).apply {
-            setPadding(0, dp(12), 0, 0)
-        })
-        card.addView(controls)
     }
 
     private fun section(parent: LinearLayout, title: String, icon: Int? = null, build: (LinearLayout) -> Unit) {

@@ -169,6 +169,18 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_HEVC_SOFTWARE_DECODER, false)
 
+    // Legacy fork: home screen, USB auto-launch.
+    fun loadSimpleHome(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("simple_home", true)
+    fun saveSimpleHome(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("simple_home", enabled).apply()
+    }
+    fun loadUsbAutoLaunch(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("usb_auto_launch", true)
+    fun saveUsbAutoLaunch(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("usb_auto_launch", enabled).apply()
+    }
+
     // Legacy fork: video latency options.
     fun loadLowLatencyVideo(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("low_latency_video", true)
