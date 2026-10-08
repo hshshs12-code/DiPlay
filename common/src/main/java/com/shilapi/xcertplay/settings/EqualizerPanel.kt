@@ -103,7 +103,7 @@ class EqualizerPanel(
         }
         body.addView(bands, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230)).apply { topMargin = dp(8) })
         body.addView(TextView(context).apply {
-            text = "Drag up to boost, down to cut. Values in dB. Boosts lower the overall level by the same amount so nothing clips; raise the car volume to compensate."
+            text = "Drag up to boost, down to cut. Values in dB. Large boosts on loud tracks can clip; the soft limiter (12-band mode) rounds them off."
             textSize = 13f; setTextColor(mutedColor); setPadding(0, dp(4), 0, dp(8))
         })
         if (settings.dspMode) {

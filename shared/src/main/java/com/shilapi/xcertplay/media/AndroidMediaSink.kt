@@ -1429,10 +1429,8 @@ private class AudioRenderer(
         }
         // Legacy fork: headroom before any boost (device effects run after the track, unclamped),
         // then the optional 12-band stage. Media only; calls and navigation keep their level.
-        if (mappedChannel == AudioChannel.MEDIA) {
-            EqualizerDsp.scale(data, offset, length, EqualizerDsp.headroom)
-            eqDsp?.process(data, offset, length)
-        }
+        // Headroom attenuation (24.14) removed at the user's request; boosts are applied as set.
+        if (mappedChannel == AudioChannel.MEDIA) eqDsp?.process(data, offset, length)
         var written = 0
         while (written < length && running) {
             val writeLength = if (playbackStarted) {
