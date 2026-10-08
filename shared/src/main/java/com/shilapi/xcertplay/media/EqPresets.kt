@@ -9,6 +9,9 @@ object EqPresets {
     //               31  62 125 250 500  1k  2k  3k  4k  8k 12k 16k
     val ALL: List<Preset> = listOf(
         Preset("Flat",            intArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+        //                         31  62 125 250 500  1k  2k  3k  4k  8k 12k 16k
+        Preset("Sound Good",      intArrayOf(4, 3, 2, 1, -2, -3, -1, 0, 1, 2, 3, 3)),
+        Preset("Highs Only",      intArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 4)),
         Preset("Bass Boost",      intArrayOf(7, 6, 5, 3, 1, 0, 0, 0, 0, 0, 0, 0)),
         Preset("Bass Reducer",    intArrayOf(-7, -6, -5, -3, -1, 0, 0, 0, 0, 0, 0, 0)),
         Preset("Treble Boost",    intArrayOf(0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 6)),
