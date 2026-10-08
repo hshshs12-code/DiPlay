@@ -16,6 +16,8 @@ import org.robolectric.util.ReflectionHelpers
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29])
 class HomeCompactLayoutTest {
+    @org.junit.Before fun classicHome() { com.shilapi.xcertplay.AirPlayPersistence.saveSimpleHome(org.robolectric.RuntimeEnvironment.getApplication(), false) }
+
     @Config(qualifiers = "en-w2667dp-h1333dp")
     @Test fun fullSizeMultiWindowKeepsTheFullHome() {
         assertFalse(homeIsCompact(multiWindow = true))

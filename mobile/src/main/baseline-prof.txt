@@ -1,0 +1,7 @@
+HSPLcom/shilapi/xcertplay/**->**(**)**
+HSPLorg/bouncycastle/crypto/modes/ChaCha20Poly1305;->**(**)**
+HSPLorg/bouncycastle/crypto/engines/ChaCha7539Engine;->**(**)**
+HSPLorg/bouncycastle/crypto/engines/ChaChaEngine;->**(**)**
+HSPLorg/bouncycastle/crypto/engines/Salsa20Engine;->**(**)**
+HSPLorg/bouncycastle/crypto/macs/Poly1305;->**(**)**
+HSPLorg/bouncycastle/util/Pack;->**(**)**

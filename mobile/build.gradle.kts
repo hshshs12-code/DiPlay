@@ -17,8 +17,8 @@ android {
         applicationId = "com.shihab.diplay"
         minSdk = 24
         targetSdk = 37
-        versionCode = 43
-        versionName = "0.2.13-legacy24.12"
+        versionCode = 44
+        versionName = "0.2.13-legacy24.13"
 
     }
 
@@ -60,8 +60,13 @@ android {
     }
 }
 
+configurations.matching { it.name.contains("UnitTest") }.all {
+    exclude(group = "org.conscrypt", module = "conscrypt-android")
+}
+
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+    implementation(libs.androidx.profileinstaller)
     implementation(platform(libs.androidx.compose.bom))
     implementation(project(":common"))
     implementation(project(":shared"))

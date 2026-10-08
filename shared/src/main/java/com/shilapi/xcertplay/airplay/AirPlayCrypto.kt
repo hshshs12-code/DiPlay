@@ -44,9 +44,37 @@ object AirPlayCrypto {
         var implementation: String = cipher.provider.name
     }
 
+    /**
+     * Legacy fork: Android 8 has no platform ChaCha20-Poly1305, so bundled Conscrypt (BoringSSL,
+     * native) is tried before falling back to BouncyCastle's Java implementation.
+     */
+    private val bundledConscrypt: java.security.Provider? by lazy {
+        if (Build.VERSION.SDK_INT >= 28 || Build.FINGERPRINT == "robolectric") null
+        else runCatching {
+            if (org.conscrypt.Conscrypt.isAvailable()) org.conscrypt.Conscrypt.newProvider() else null
+        }.getOrNull()
+    }
+
     private val platformState = ThreadLocal.withInitial<PlatformChacha?> {
-        PLATFORM_CHACHA_NAMES.firstNotNullOfOrNull { runCatching { Cipher.getInstance(it) }.getOrNull() }
-            ?.let(::PlatformChacha)
+        (PLATFORM_CHACHA_NAMES.firstNotNullOfOrNull { runCatching { Cipher.getInstance(it) }.getOrNull() }
+            ?: bundledConscrypt?.let { provider ->
+                PLATFORM_CHACHA_NAMES.firstNotNullOfOrNull { runCatching { Cipher.getInstance(it, provider) }.getOrNull() }
+            })?.let(::PlatformChacha)
+    }
+
+    /** Runs the seal/open path over [bytes] of data so the JIT compiles it; returns the implementation used. */
+    fun warmUp(bytes: Int, chunk: Int): String {
+        val key = ByteArray(32) { it.toByte() }
+        val plain = ByteArray(chunk) { (it * 7).toByte() }
+        var counter = 0L
+        var done = 0
+        while (done < bytes) {
+            val nonce = nonce64(counter++)
+            val sealed = platformChacha(Cipher.ENCRYPT_MODE, key, nonce, plain, ByteArray(0)) ?: chachaSealBouncyCastle(key, nonce, plain)
+            platformChacha(Cipher.DECRYPT_MODE, key, nonce, sealed, ByteArray(0)) ?: chachaOpenBouncyCastle(key, nonce, sealed)
+            done += chunk
+        }
+        return chachaImplementation
     }
 
     /** Implementation used by this thread's last successful operation, for diagnostics. */

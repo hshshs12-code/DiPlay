@@ -205,6 +205,7 @@ class DiPlayActivity : ComponentActivity() {
         pendingCarHotspotSetup = savedInstanceState?.getBoolean("pending_car_hotspot") ?: false
         bydVehicleAdvancedExpanded = savedInstanceState?.getBoolean("byd_vehicle_advanced") ?: false
         ManualParkedVideo.bind(this)
+        com.shilapi.xcertplay.media.StartupWarmup.run(com.shilapi.xcertplay.media.AudioEffectSettings.load(this).let { it.enabled && it.dspMode })
         page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: "home"
         render()
         scheduleAutomaticVehicleValidation()
@@ -627,6 +628,21 @@ class DiPlayActivity : ComponentActivity() {
                 AirPlayPersistence.saveUsbAutoLaunch(this, it)
             }
             card.addView(label("Tip: USB conflicts → \"Make DiPlay the default for the iPhone\" opens the prompt with the Use by default checkbox.", 13, MUTED).apply { setPadding(0, dp(8), 0, 0) })
+            card.addView(button("Precompile app code (ADB, one time)", false) {
+                toast("Compiling through head-unit ADB, this takes a minute…")
+                Thread {
+                    val outcome = runCatching { UsbCompetitors.runAdb(this, listOf("cmd package compile -m speed -f $packageName", "pm compile -m speed -f $packageName")) }
+                    runOnUiThread {
+                        val text = outcome.getOrNull()?.let { o ->
+                            if (o.access != com.shilapi.xcertplay.adb.LocalAdb.Access.READY)
+                                "ADB ${o.access}. Enable ADB over network on the head unit, or run from a computer:\n\nadb shell cmd package compile -m speed -f $packageName"
+                            else o.lines.joinToString("\n\n")
+                        } ?: "ADB failed: ${outcome.exceptionOrNull()?.message}"
+                        AlertDialog.Builder(this).setTitle("Precompile").setMessage(text).setPositiveButton(getString(R.string.close), null).show()
+                    }
+                }.start()
+            }, matchButton(10, 56))
+            card.addView(label("Compiles DiPlay ahead of time so the first minute after a cold start is not slower than the rest. Without ADB, Android does this by itself overnight when the unit is idle.", 13, MUTED).apply { setPadding(0, dp(6), 0, 0) })
         }
         section(content, "USB conflicts", R.drawable.ic_dp_connection) { card -> usbCompetitorsSection(card) }
         section(content, "Updates", R.drawable.ic_dp_about) { card -> updateSection(card) }
@@ -3246,6 +3262,7 @@ class DiPlayActivity : ComponentActivity() {
         appendLine("--- Recent own-app process exits (Android 11+) ---")
             appendLine(ProcessExitDiagnostics.report(appContext))
             appendLine()
+            SessionLogFile.flushAll(2_000)
             for (name in SessionLogFile.REPORT_NAMES) {
                 val file = File(appContext.filesDir, "logs/$name")
                 if (file.isFile) {

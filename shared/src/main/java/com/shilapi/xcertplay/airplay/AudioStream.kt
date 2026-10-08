@@ -84,6 +84,7 @@ class AudioStream(
     }
 
     private fun runData(socket: DatagramSocket, listener: Listener) {
+        com.shilapi.xcertplay.media.ThreadPriorities.audio()
         val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
         try {

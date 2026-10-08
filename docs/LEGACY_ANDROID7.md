@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.11)
+## Fork features (0.2.13-legacy24.13)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,20 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Cold-start performance (24.13)**: (1) native ChaCha20-Poly1305 through
+  bundled Conscrypt on Android < 9, where the platform has none and every
+  video frame and audio packet otherwise went through BouncyCastle's Java
+  implementation, interpreted until the JIT caught up (the "laggy first
+  minute"); (2) thread priorities: audio renderer and audio receiver at
+  URGENT_AUDIO, video decoder and screen receiver at DISPLAY, USB/NCM
+  readers above foreground; (3) the session log keeps one buffered writer
+  flushed per line instead of stat + open + append + close per line on the
+  producing thread; (4) `StartupWarmup` exercises the seal/open path (3 MiB)
+  and, when enabled, the 12-band EQ at app launch so the JIT compiles them
+  before the iPhone connects; (5) a wildcard baseline profile with
+  ProfileInstaller so background dexopt compiles the app ahead of time, and
+  a one-tap "Precompile app code (ADB)" button running `cmd package compile
+  -m speed -f`. Revert point: tag `stable-24.12`.
 - **12-band software equalizer** (`EqualizerDsp`): optional mode next to the
   device's own effect. Twelve peaking biquads (31 Hz to 16 kHz, ±12 dB, Q 1.1)
   on the decoded PCM before the AudioTrack write, bands at 0 dB skipped, with

@@ -543,6 +543,7 @@ class CarPlayHostActivity : ComponentActivity() {
         MapMirrors.onChanged = mirrorsChanged
         languagePreferenceAtCreate = AppLocale.preference(this)
         ManualParkedVideo.bind(this)
+        com.shilapi.xcertplay.media.StartupWarmup.run(com.shilapi.xcertplay.media.AudioEffectSettings.load(this).let { it.enabled && it.dspMode })
         if (isIphoneUsbAttachment(intent)) {
             if (!AirPlayPersistence.loadUsbAutoLaunch(this) && !CarPlayBackgroundSession.hasSession()) {
                 // Launched by Android for the plugged-in iPhone, but auto-launch is off: go away quietly.

@@ -53,6 +53,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     }
 
     private fun accept(bound: ServerSocket) {
+        com.shilapi.xcertplay.media.ThreadPriorities.video()
         try {
             val accepted = bound.accept()
             socket = accepted

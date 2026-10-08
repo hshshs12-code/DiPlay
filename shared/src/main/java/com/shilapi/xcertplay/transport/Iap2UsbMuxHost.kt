@@ -203,6 +203,7 @@ class Iap2UsbMuxHost private constructor(
     }
 
     private fun readerLoop() {
+        com.shilapi.xcertplay.media.ThreadPriorities.transport()
         try {
             while (true) {
                 synchronized(stateLock) {

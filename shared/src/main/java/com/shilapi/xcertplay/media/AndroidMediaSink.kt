@@ -504,6 +504,7 @@ private class VideoDecoder(
     }
 
     private fun run() {
+        ThreadPriorities.video()
         try {
             while (running) {
                 val job = queue.poll(5)
@@ -957,6 +958,7 @@ private class AudioRenderer(
     }
 
     private fun run() {
+        ThreadPriorities.audio()
         try {
             runCatching { report("Audio: starting api=${Build.VERSION.SDK_INT} " +
                 "audioType=${format.audioType} codec=${format.codec} rate=${format.sampleRate} channels=${format.channels} " +

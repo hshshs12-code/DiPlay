@@ -30,6 +30,10 @@ android {
     }
 }
 
+configurations.matching { it.name.contains("UnitTest") }.all {
+    exclude(group = "org.conscrypt", module = "conscrypt-android")
+}
+
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     api(project(":shared"))

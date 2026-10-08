@@ -33,11 +33,16 @@ android {
         coreLibraryDesugaringEnabled = true
     }
 }
+configurations.matching { it.name.toLowerCase().contains('unittest') }.all {
+    exclude group: 'org.conscrypt', module: 'conscrypt-android'
+}
+
 dependencies {
     coreLibraryDesugaring libs.desugar.jdk.libs
     implementation libs.androidx.app
     implementation libs.bouncycastle
     implementation libs.jmdns
+    implementation libs.conscrypt.android
     testImplementation libs.junit
     testImplementation 'org.robolectric:robolectric:4.17'
 }

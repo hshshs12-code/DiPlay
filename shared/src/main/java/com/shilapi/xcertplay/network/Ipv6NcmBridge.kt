@@ -72,6 +72,7 @@ class Ipv6NcmBridge(
     }
 
     private fun runNcmToTun() {
+        com.shilapi.xcertplay.media.ThreadPriorities.transport()
         val output = FileOutputStream(tun.fileDescriptor)
         try {
             while (running.get()) {
@@ -113,6 +114,7 @@ class Ipv6NcmBridge(
     }
 
     private fun runTunToNcm() {
+        com.shilapi.xcertplay.media.ThreadPriorities.transport()
         val input = FileInputStream(tun.fileDescriptor)
         val buffer = ByteArray(TUN_READ_BYTES)
         try {
