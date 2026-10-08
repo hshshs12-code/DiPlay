@@ -76,3 +76,21 @@ class EqualizerDspTest {
         assertEquals(12, EqualizerDsp.BANDS)
     }
 }
+
+class HeadroomTest {
+    @Test fun deviceBoostLowersTheLevelByTheSameAmount() {
+        val s = AudioEffectSettings(enabled = true, bandLevelsMb = listOf(400, 0, 0, 0, 0))
+        val gain = s.headroomGain()
+        assertTrue("expected -4 dB (0.63), got $gain", gain > 0.62f && gain < 0.64f)
+        assertEquals(1f, AudioEffectSettings(enabled = false, bandLevelsMb = listOf(400)).headroomGain())
+        assertEquals(1f, AudioEffectSettings(enabled = true, bandLevelsMb = listOf(-400, 0)).headroomGain())
+    }
+
+    @Test fun scaleHalvesSamples() {
+        val data = byteArrayOf(0x00, 0x40, 0x00, 0xC0.toByte()) // +16384, -16384
+        EqualizerDsp.scale(data, 0, data.size, 0.5f)
+        val a = (data[1].toInt() shl 8) or (data[0].toInt() and 0xff)
+        val b = (data[3].toInt() shl 8) or (data[2].toInt() and 0xff)
+        assertEquals(8192, a); assertEquals(-8192, b)
+    }
+}

@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.13)
+## Fork features (0.2.13-legacy24.14)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,11 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Boost headroom (24.14)**: Android's Equalizer and BassBoost run after
+  the track with no headroom, so a boosted band on a loud master hard-clips
+  (heard as fuzz). The media PCM is now attenuated by the largest boost (device
+  band boost, bass boost ≈ 6 dB at full strength, or 12-band boost with the
+  limiter off) before the effects. Calls and navigation are untouched.
 - **Cold-start performance (24.13)**: (1) native ChaCha20-Poly1305 through
   bundled Conscrypt on Android < 9, where the platform has none and every
   video frame and audio packet otherwise went through BouncyCastle's Java

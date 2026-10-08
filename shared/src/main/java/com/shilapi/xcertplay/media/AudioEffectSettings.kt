@@ -25,6 +25,24 @@ data class AudioEffectSettings(
 ) {
     fun dspGainsDb(): FloatArray = FloatArray(EqualizerDsp.BANDS) { dspGainsDb.getOrElse(it) { 0 }.toFloat() }
 
+    /**
+     * Linear gain applied to the PCM before any boost so the boosted peaks fit in 16 bits. Android's
+     * Equalizer and BassBoost run after the track with no headroom: a +4 dB band on a loud master
+     * hard-clips, which is heard as fuzz. The level drops by the largest boost in dB instead.
+     */
+    fun headroomGain(): Float {
+        if (!enabled) return 1f
+        var boostDb = 0f
+        if (dspMode) {
+            if (!limiter) boostDb = maxOf(boostDb, (dspGainsDb.maxOrNull() ?: 0).toFloat())
+        } else {
+            boostDb = maxOf(boostDb, (bandLevelsMb.maxOrNull() ?: 0) / 100f)
+        }
+        boostDb = maxOf(boostDb, bassStrength / 1000f * 6f)   // BassBoost at full strength is roughly +6 dB
+        if (boostDb <= 0f) return 1f
+        return Math.pow(10.0, -boostDb / 20.0).toFloat()
+    }
+
     companion object {
         private const val PREFS = "diplay_audio_effects"
         private const val KEY_ENABLED = "enabled"
@@ -53,7 +71,7 @@ data class AudioEffectSettings(
                 dspGainsDb = List(EqualizerDsp.BANDS) { dsp.getOrElse(it) { 0 }.coerceIn(-12, 12) },
                 limiter = prefs.getBoolean(KEY_LIMITER, false),
                 presetName = prefs.getString(KEY_PRESET, "") ?: "",
-            ).also { cached = it }
+            ).also { cached = it; EqualizerDsp.headroom = it.headroomGain() }
         }
 
         fun save(context: Context, settings: AudioEffectSettings) {

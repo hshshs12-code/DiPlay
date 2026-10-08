@@ -106,6 +106,23 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         fun applyToActive(settings: AudioEffectSettings) {
             val snapshot = synchronized(active) { active.toList() }
             snapshot.forEach { it.configure(settings.dspGainsDb(), settings.limiter && settings.enabled && settings.dspMode) }
+            headroom = settings.headroomGain()
+        }
+
+        /** Shared pre-gain read by every renderer on each write; updated with the settings. */
+        @Volatile var headroom: Float = 1f
+
+        /** Scales 16-bit interleaved PCM in place by [gain]. */
+        fun scale(data: ByteArray, offset: Int, length: Int, gain: Float) {
+            if (gain >= 0.999f) return
+            var i = offset
+            val end = offset + length - 1
+            while (i < end) {
+                val v = ((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xff))
+                val s = (v * gain).toInt().coerceIn(-32768, 32767)
+                data[i] = s.toByte(); data[i + 1] = (s shr 8).toByte()
+                i += 2
+            }
         }
     }
 }
