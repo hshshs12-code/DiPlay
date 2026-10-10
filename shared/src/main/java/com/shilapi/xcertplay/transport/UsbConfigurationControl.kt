@@ -18,7 +18,7 @@ import android.hardware.usb.UsbDeviceConnection
  * interface; releasing it afterwards leaves the interface unclaimed. Doing that for every
  * interface of the active configuration lets the configuration change go through.
  */
-internal object UsbConfigurationControl {
+object UsbConfigurationControl {
     private const val GET_CONFIGURATION = 0x08
     private const val TIMEOUT_MILLIS = 1_000
 

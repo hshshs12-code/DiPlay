@@ -7,6 +7,7 @@
     <!-- Optional, user-authorized startup of the car's own hotspot. -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
 
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
@@ -62,6 +63,15 @@
         </activity>
         <service android:name="com.shilapi.xcertplay.DiPlaySessionService"
             android:exported="false" android:foregroundServiceType="connectedDevice|microphone|location" />
+        <!-- Legacy fork: iPod audio over USB (audio without CarPlay). -->
+        <activity android:name="com.shilapi.xcertplay.IpodModeActivity"
+            android:label="iPod audio"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:configChanges="density|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:theme="@style/Theme.Xcertplay" />
+        <service android:name="com.shilapi.xcertplay.IpodAudioService"
+            android:exported="false" android:foregroundServiceType="connectedDevice|microphone" />
 
         <activity
             android:name="com.shilapi.xcertplay.CarPlayHostActivity"

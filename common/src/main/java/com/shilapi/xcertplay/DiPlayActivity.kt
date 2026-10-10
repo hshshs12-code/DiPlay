@@ -208,6 +208,7 @@ class DiPlayActivity : ComponentActivity() {
         com.shilapi.xcertplay.media.StartupWarmup.run(com.shilapi.xcertplay.media.AudioEffectSettings.load(this).let { it.enabled && it.dspMode })
         page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: "home"
         render()
+        consumeConnectUsbExtra()
         scheduleAutomaticVehicleValidation()
         handleWirelessRecovery()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -221,6 +222,7 @@ class DiPlayActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
         page = intent.getStringExtra("page") ?: "home"; render()
+        consumeConnectUsbExtra()
         automaticVehicleValidationStarted = false
         scheduleAutomaticVehicleValidation()
         handleWirelessRecovery()
@@ -404,6 +406,7 @@ class DiPlayActivity : ComponentActivity() {
             WirelessHotspotMode.MANUAL -> "Car hotspot"
             else -> "Wi-Fi Direct"
         }, false) { if (sessionActive) openProjection() else connect(true) }
+        tiles += tile(if (IpodAudioEngine.isRunning()) "iPod audio ▶" else "iPod audio (USB)", if (IpodAudioEngine.isRunning()) "Playing · tap to control" else "Music without CarPlay", false) { openIpodMode() }
         tiles += tile("Choose iPhone", "Wireless: ${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }
         tiles += tile("Equalizer", "EQ, bass boost, loudness", false) { page = "eq"; render() }
         tiles += tile("Settings", "Display, audio, USB, updates", false) { page = "settings"; render() }
@@ -446,6 +449,8 @@ class DiPlayActivity : ComponentActivity() {
             val usbBtn = button(getString(R.string.connect_with_usb), false) { connect(false) }
             val settingsBtn = button(getString(R.string.settings), false) { page = "settings"; render() }
             buttonRow.addView(usbBtn, LinearLayout.LayoutParams(0, dp(38), 1f))
+            buttonRow.addView(space(8), LinearLayout.LayoutParams(dp(8), 1))
+            buttonRow.addView(button("iPod audio", false) { openIpodMode() }, LinearLayout.LayoutParams(0, dp(38), 1f))
             buttonRow.addView(space(8), LinearLayout.LayoutParams(dp(8), 1))
             buttonRow.addView(settingsBtn, LinearLayout.LayoutParams(0, dp(38), 1f))
             card.addView(buttonRow)
@@ -513,6 +518,8 @@ class DiPlayActivity : ComponentActivity() {
         }
         right.addView(button(getString(R.string.connect_with_usb), false) { connect(false) }, matchButton())
         right.addView(label(getString(R.string.plug_your_iphone_into_a_usb_data_port_allow_carplay_when_y), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(10), dp(8), dp(24)) })
+        right.addView(button("iPod audio (USB)", false) { openIpodMode() }, matchButton())
+        right.addView(label("Play the iPhone's audio through the car without CarPlay.", 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(10), dp(8), dp(24)) })
         right.addView(button(getString(R.string.settings), false) { page = "settings"; render() }, matchButton())
         right.addView(label(getString(R.string.make_diplay_feel_right_for_your_car), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(24)) })
         right.addView(label("${getString(R.string.home_public_preview)}${version()}", 12, MUTED).apply { letterSpacing = .08f })
@@ -3024,6 +3031,17 @@ class DiPlayActivity : ComponentActivity() {
         parent.addView(space(12))
     }
 
+    /** Legacy fork: "Switch to CarPlay" from the iPod screen lands here with connect_usb=true. */
+    private fun consumeConnectUsbExtra() {
+        if (!intent.getBooleanExtra("connect_usb", false)) return
+        intent.removeExtra("connect_usb")
+        connect(false)
+    }
+
+    private fun openIpodMode() {
+        startActivity(Intent(this, IpodModeActivity::class.java))
+    }
+
     private fun connect(wireless: Boolean) {
         startupHotspotCancelled = true
         if (wireless && pendingCarHotspotSetup) { toast(getString(R.string.save_your_hotspot_details_in_connection_setup_first)); page = "connection"; render(); return }
@@ -3283,7 +3301,7 @@ class DiPlayActivity : ComponentActivity() {
             appendLine(ProcessExitDiagnostics.report(appContext))
             appendLine()
             SessionLogFile.flushAll(2_000)
-            for (name in SessionLogFile.REPORT_NAMES) {
+            for (name in SessionLogFile.REPORT_NAMES + "ipod.log") {
                 val file = File(appContext.filesDir, "logs/$name")
                 if (file.isFile) {
                     appendLine("--- $name ---")

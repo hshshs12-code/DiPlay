@@ -39,7 +39,27 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.19)
+## Fork features (0.2.13-legacy24.20)
+
+24.20: iPod audio over USB (audio without CarPlay)
+- New "iPod audio (USB)" button on both home screens and a dedicated screen
+  (`IpodModeActivity`). It switches the iPhone to its USB-audio configuration
+  (the one this head unit forces anyway), lets the kernel bind snd-usb-audio,
+  waits for Android to list the USB input device, captures it with AudioRecord
+  and plays it through the car with the fork's EQ/bass/loudness, soft clipper,
+  legacy STREAM_MUSIC routing and low-latency track (`IpodAudioEngine`).
+- Foreground service with a Stop action keeps it playing while other head-unit
+  apps are in front; partial wake lock while running.
+- Controls: volume, +6 dB gain boost, mute, live level/peak meter, seconds
+  played and underrun counter, last log lines on screen, Equalizer shortcut,
+  "Switch to CarPlay" (stops iPod audio and starts the wired connect).
+- "Start iPod audio on plug-in instead of CarPlay": when Android hands DiPlay
+  the iPhone, the iPod screen opens and starts instead of the CarPlay host.
+- Diagnostics: `logs/ipod.log` is part of the uploaded report, including the
+  HID interface's report descriptor dump (groundwork for track controls and
+  metadata over Apple's accessory protocol).
+
+
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset

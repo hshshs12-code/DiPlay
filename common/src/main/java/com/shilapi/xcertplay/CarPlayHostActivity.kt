@@ -545,6 +545,13 @@ class CarPlayHostActivity : ComponentActivity() {
         ManualParkedVideo.bind(this)
         com.shilapi.xcertplay.media.StartupWarmup.run(com.shilapi.xcertplay.media.AudioEffectSettings.load(this).let { it.enabled && it.dspMode })
         if (isIphoneUsbAttachment(intent)) {
+            if (IpodSettings.autoStartOnPlugIn(this) && !CarPlayBackgroundSession.hasSession()) {
+                // Legacy fork: the user chose iPod audio over CarPlay for plug-ins.
+                IpodAudioEngine.log(this, "USB attach: starting iPod audio instead of CarPlay")
+                startActivity(Intent(this, IpodModeActivity::class.java).putExtra("auto_start", true))
+                finish()
+                return
+            }
             if (!AirPlayPersistence.loadUsbAutoLaunch(this) && !CarPlayBackgroundSession.hasSession()) {
                 // Launched by Android for the plugged-in iPhone, but auto-launch is off: go away quietly.
                 finish()

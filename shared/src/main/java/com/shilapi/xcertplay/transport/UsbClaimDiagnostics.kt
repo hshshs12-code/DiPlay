@@ -8,7 +8,7 @@ import java.io.File
  * world-readable sysfs tree: for each interface of the device's current configuration it reports
  * the kernel driver bound to it (for example cdc_ncm, usbfs for another app, or none).
  */
-internal object UsbClaimDiagnostics {
+object UsbClaimDiagnostics {
     fun describe(device: UsbDevice?): String {
         if (device == null) return "sysfs=device-unknown"
         return runCatching { describeOrThrow(device) }.getOrElse { "sysfs=unavailable(${it.javaClass.simpleName})" }
