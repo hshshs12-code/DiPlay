@@ -128,8 +128,13 @@ object AudioPath {
 
     private fun pinVolume(app: Context, manager: AudioManager, log: (String) -> Unit) {
         if (!AirPlayPersistence.loadPinMediaVolume(app)) return
-        val knob = knob(app)
-        if (knob == Knob.SOFTWARE) { lastVolumeNote = "Not pinning media volume: the knob is Android's software volume."; return }
+        when (knob(app)) {
+            Knob.SOFTWARE -> { lastVolumeNote = "Not pinning media volume: the knob is Android's software volume."; return }
+            // Never touch the volume before the knob type is known: on a software-volume unit a
+            // pin to maximum would start the first session at full blast.
+            Knob.UNKNOWN -> { lastVolumeNote = "Not pinning media volume until the knob type is known (turn it during a session, or set it below)."; return }
+            Knob.HARDWARE -> Unit
+        }
         val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val current = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
         if (current >= max) { lastVolumeNote = "Media volume already at maximum ($max)."; return }

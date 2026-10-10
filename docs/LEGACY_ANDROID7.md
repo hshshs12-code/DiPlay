@@ -39,7 +39,12 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.25)
+## Fork features (0.2.13-legacy24.26)
+
+24.26: media-volume pin only after the knob is known to be hardware
+- `AudioPath.pinVolume` does nothing while the knob type is UNKNOWN (24.25
+  pinned to maximum on the first session, which on a software-volume unit
+  starts playback at full volume).
 
 24.25: audio path — DiPlay as the sound card
 - `MediaOutputStage` + `SincResampler` (32-tap Kaiser windowed sinc, 256
