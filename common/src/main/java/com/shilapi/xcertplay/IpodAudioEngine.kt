@@ -33,6 +33,9 @@ import com.shilapi.xcertplay.ipod.Iap2IpodClient
 import com.shilapi.xcertplay.ipod.Iap2IpodConfig
 import com.shilapi.xcertplay.ipod.IpodHidKey
 import com.shilapi.xcertplay.ipod.IpodPowerState
+import com.shilapi.xcertplay.ipod.UsbAudioAlternate
+import com.shilapi.xcertplay.ipod.UsbAudioDescriptors
+import com.shilapi.xcertplay.ipod.UsbIsoAudioCapture
 import com.shilapi.xcertplay.media.AudioEffectController
 import com.shilapi.xcertplay.media.AudioEffectSettings
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
@@ -81,6 +84,10 @@ object IpodAudioEngine {
     private var logFile: SessionLogFile? = null
     @Volatile private var client: Iap2IpodClient? = null
     @Volatile private var audio: CaptureLoop? = null
+    /** The open USB connection plus the audio-streaming formats, for the direct isochronous driver. */
+    private class DirectContext(val connection: UsbDeviceConnection, val interfaces: List<UsbInterface>, val alternates: List<UsbAudioAlternate>)
+    @Volatile private var direct: DirectContext? = null
+    @Volatile var audioPath: String = ""; private set
     private val traceCounts = HashMap<String, Int>()
 
     fun isRunning() = running.get()
@@ -183,6 +190,15 @@ object IpodAudioEngine {
                 log(app, "hid descriptor hex=" + descriptor.joinToString("") { "%02x".format(it.toInt() and 0xff) })
                 error("The HID descriptor declares no iAP2 reports (${layout.describe()})")
             }
+            // Direct capture needs the audio-streaming formats, which Android does not expose: read the
+            // configuration descriptor and parse the UAC1 format descriptors ourselves.
+            val interfaces = (0 until configuration.interfaceCount).map(configuration::getInterface)
+            val alternates = runCatching {
+                UsbIsoAudioCapture.readConfigurationDescriptor(connection, device, configuration.id)?.let(UsbAudioDescriptors::parse)
+            }.onFailure { log(app, "configuration descriptor read failed: ${it.message}") }.getOrNull().orEmpty()
+            alternates.forEach { log(app, "usb audio format ${it.describe()}") }
+            if (alternates.isEmpty()) log(app, "no UAC1 audio-streaming formats found; direct USB audio unavailable")
+            direct = DirectContext(connection, interfaces, alternates)
             val hidStream = Iap2HidStream(connection, hid.id, inEndpoint, outEndpoint, layout,
                 isAttached = { usb.deviceList.values.any { it.deviceName == device.deviceName } }) { log(app, it) }
             stream = hidStream
@@ -217,6 +233,7 @@ object IpodAudioEngine {
             } finally {
                 client = null
                 audio?.stop(); audio = null
+                direct = null
                 runCatching { session.close() }
             }
         } finally {
@@ -327,6 +344,70 @@ object IpodAudioEngine {
         }
 
         private fun capture() {
+            val context = direct
+            if (context != null && IpodSettings.directUsbAudio(app) && context.alternates.isNotEmpty()) {
+                val opened = runCatching {
+                    UsbIsoAudioCapture.open(context.connection, context.interfaces, context.alternates, rateHz) { log(app, it) }
+                }.onFailure { log(app, "direct usb audio unavailable: ${it.message}; falling back to Android capture") }.getOrNull()
+                if (opened != null) { captureDirect(opened); return }
+            }
+            captureAndroid()
+        }
+
+        /** usbfs isochronous packets → EQ → AudioTrack, no Android audio input in the path. */
+        private fun captureDirect(source: UsbIsoAudioCapture) {
+            val rate = source.rateHz
+            val channels = source.channels
+            sampleRate = rate
+            audioPath = "direct"
+            inputDevice = "direct USB isochronous (${source.alternate.describe()})"
+            val track = openTrack(rate, channels, bufferMillis = 120)
+            val fx = AudioEffectSettings.load(app)
+            val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx.dspGainsDb(), fx.limiter || AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
+                else if (AirPlayPersistence.loadSoftClipMedia(app)) EqualizerDsp(rate, channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
+                else null
+            val effects = if (fx.enabled) AudioEffectController.attach(track.audioSessionId, fx) else null
+            log(app, "direct capture rate=$rate channels=$channels session=${track.audioSessionId} dsp=${dsp != null} effects=${effects?.describe() ?: "none"}")
+            var timeouts = 0
+            var started = false
+            var lastStats = System.currentTimeMillis()
+            try {
+                source.use {
+                    while (active.get()) {
+                        val pcm = source.read(10, 250)
+                        if (pcm.isEmpty()) {
+                            timeouts++
+                            if (timeouts == 20) log(app, "no USB audio packets for 5 s (${source.stats()}): start playback on the phone")
+                            if (!started && timeouts >= 40) { log(app, "direct usb audio delivered nothing in 10 s; falling back to Android capture"); break }
+                            continue
+                        }
+                        timeouts = 0
+                        if (!started) { started = true; track.play(); audioActive = true; notifyListeners(); log(app, "direct usb audio flowing: ${source.stats()}") }
+                        applyGain(pcm, pcm.size)
+                        dsp?.process(pcm, 0, pcm.size)
+                        measure(pcm, pcm.size)
+                        var written = 0
+                        while (written < pcm.size && active.get()) {
+                            val n = track.write(pcm, written, pcm.size - written)
+                            if (n < 0) error("AudioTrack write failed ($n)")
+                            written += n
+                        }
+                        framesPlayed += pcm.size / (channels * 2)
+                        underruns = track.underrunCount
+                        val now = System.currentTimeMillis()
+                        if (now - lastStats > 30_000) { lastStats = now; log(app, "direct usb audio ${source.stats()} underruns=$underruns") }
+                    }
+                }
+            } finally {
+                runCatching { track.pause(); track.flush(); track.release() }
+                dsp?.unregister(); runCatching { effects?.close() }
+                audioActive = false
+            }
+            if (active.get() && !started) captureAndroid()
+        }
+
+        private fun captureAndroid() {
+            audioPath = "android"
             val audioManager = app.getSystemService(AudioManager::class.java) ?: error("Audio service unavailable")
             val input = waitForUsbInput(audioManager)
             inputDevice = input?.let { "${it.productName} type=${it.type} rates=${it.sampleRates.joinToString("/")} ch=${it.channelCounts.joinToString("/")}" } ?: "none (default input)"
@@ -336,7 +417,7 @@ object IpodAudioEngine {
             val rate = record.sampleRate
             sampleRate = rate
             val channels = if (record.channelCount >= 2) 2 else 1
-            val track = openTrack(rate, channels)
+            val track = openTrack(rate, channels, bufferMillis = 200)
             val fx = AudioEffectSettings.load(app)
             val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx.dspGainsDb(), fx.limiter || AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
                 else if (AirPlayPersistence.loadSoftClipMedia(app)) EqualizerDsp(rate, channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
@@ -403,10 +484,10 @@ object IpodAudioEngine {
             return null
         }
 
-        private fun openTrack(rate: Int, channels: Int): AudioTrack {
+        private fun openTrack(rate: Int, channels: Int, bufferMillis: Int): AudioTrack {
             val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
             val minimum = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
-            val bytes = maxOf(minimum * 2, rate * channels * 2 / 5)
+            val bytes = maxOf(minimum * 2, rate * channels * 2 * bufferMillis / 1000)
             val legacy = AirPlayPersistence.loadMediaAudioChannel(app)
             val attributes = if (legacy in 1..10) AudioAttributes.Builder().setLegacyStreamType(legacy).build()
                 else AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
@@ -457,6 +538,9 @@ object IpodSettings {
     fun autoStartOnPlugIn(context: Context): Boolean = prefs(context).getBoolean("auto_start", false)
     fun saveAutoStartOnPlugIn(context: Context, value: Boolean) = prefs(context).edit().putBoolean("auto_start", value).apply()
     /** Current the head unit's USB port can supply, announced to the iPhone (mA). */
+    /** Capture the iPhone's USB audio with the fork's own isochronous driver instead of Android's audio input. */
+    fun directUsbAudio(context: Context): Boolean = prefs(context).getBoolean("direct_usb_audio", true)
+    fun saveDirectUsbAudio(context: Context, value: Boolean) = prefs(context).edit().putBoolean("direct_usb_audio", value).apply()
     fun chargeCurrent(context: Context): Int = prefs(context).getInt("charge_ma", 1000)
     fun saveChargeCurrent(context: Context, value: Int) = prefs(context).edit().putInt("charge_ma", value).apply()
     val CHARGE_CURRENTS = listOf(500, 1000, 1500, 2100, 2400)

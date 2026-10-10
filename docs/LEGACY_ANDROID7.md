@@ -39,7 +39,21 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.21)
+## Fork features (0.2.13-legacy24.22)
+
+24.22: direct USB audio driver for iPod mode
+- `usb_iso_audio.c` submits isochronous URBs through usbfs on the file
+  descriptor Android already grants, so the iPhone's USB device-mode audio is
+  read straight off the bus into DiPlay's output path. No Android USB audio
+  input, no microphone permission needed for audio, ~50 ms pipeline.
+- `UsbAudioDescriptors` parses the UAC1 streaming formats from the
+  configuration descriptor (Android does not expose them); `UsbIsoAudioCapture`
+  claims the streaming interface (detaching snd-usb-audio), selects the PCM
+  alternate, sets the endpoint sample rate (SET_CUR) and converts 24/32-bit
+  subframes to 16-bit when that is all the phone offers.
+- On by default ("Direct USB audio driver" switch); the Android capture path
+  from 24.20 remains as an automatic fallback when the direct driver cannot
+  open or delivers nothing for 10 s.
 
 24.21: iPod mode made native (iAP2 over USB HID)
 - DiPlay now identifies and authenticates to the iPhone as a real USB audio

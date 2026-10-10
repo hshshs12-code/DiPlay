@@ -10,3 +10,9 @@ LOCAL_MODULE := local_hotspot_radio
 LOCAL_SRC_FILES := local_hotspot_radio.c
 LOCAL_CFLAGS := -Wall -Wextra -Werror
 include $(BUILD_SHARED_LIBRARY)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := diplay_usb_iso_audio
+LOCAL_SRC_FILES := usb_iso_audio.c
+LOCAL_CFLAGS := -Wall -Wextra -Werror
+include $(BUILD_SHARED_LIBRARY)

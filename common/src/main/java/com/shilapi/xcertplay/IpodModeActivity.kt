@@ -155,6 +155,9 @@ class IpodModeActivity : Activity() {
         settings.addView(switchRow("Gain boost (+6 dB)", "For quiet phones; the soft clipper catches peaks when it is on.", IpodSettings.gainBoost(this)) {
             IpodAudioEngine.gainBoost = it; IpodSettings.saveGainBoost(this, it)
         })
+        settings.addView(switchRow("Direct USB audio driver", "Reads the iPhone's USB audio packets straight from the bus (lowest latency, no Android audio input). Off = Android's USB audio input.", IpodSettings.directUsbAudio(this)) {
+            IpodSettings.saveDirectUsbAudio(this, it); if (IpodAudioEngine.isRunning()) toast("Applies at the next connection")
+        })
         settings.addView(switchRow("Start iPod audio on plug-in instead of CarPlay", "When Android hands DiPlay the iPhone, this screen opens and connects.", IpodSettings.autoStartOnPlugIn(this)) {
             IpodSettings.saveAutoStartOnPlugIn(this, it)
         })
@@ -247,7 +250,7 @@ class IpodModeActivity : Activity() {
         repeatButton.text = when (IpodAudioEngine.repeat) { 1 -> "Repeat 1"; 2 -> "Repeat all"; else -> "Repeat" }
         detailView.text = if (running) buildString {
             append(if (IpodAudioEngine.authenticated) "Authenticated accessory" else if (IpodAudioEngine.identified) "Identified, authenticating…" else "Connecting…")
-            if (IpodAudioEngine.audioActive) append(" · audio ${IpodAudioEngine.sampleRate / 1000.0} kHz · ${IpodAudioEngine.framesPlayed / maxOf(1, IpodAudioEngine.sampleRate)} s · underruns ${IpodAudioEngine.underruns}")
+            if (IpodAudioEngine.audioActive) append(" · ${if (IpodAudioEngine.audioPath == "direct") "direct USB" else "Android"} audio ${IpodAudioEngine.sampleRate / 1000.0} kHz · ${IpodAudioEngine.framesPlayed / maxOf(1, IpodAudioEngine.sampleRate)} s · underruns ${IpodAudioEngine.underruns}")
             else if (IpodAudioEngine.state == IpodAudioEngine.State.READY) append(" · waiting for USB audio")
             append("\nInput: ${IpodAudioEngine.inputDevice}")
         } else "Plug the iPhone in, unlock it, then Start. Works without CarPlay: music, podcasts, any app's audio, with track info and steering-wheel keys."
