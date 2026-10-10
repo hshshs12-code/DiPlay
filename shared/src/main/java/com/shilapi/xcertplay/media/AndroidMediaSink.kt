@@ -174,6 +174,8 @@ class AndroidMediaSink(
     private val preferSoftwareHevcDecoder: Boolean = false,
     /** Legacy fork: vendor low-latency decoder hint and stale-frame dropping at the output. */
     private val lowLatencyVideo: Boolean = false,
+    /** Negotiated frame rate; the decoder's operating-rate hint uses it instead of a guess. */
+    private val videoFrameRate: Int = 30,
     /** Legacy fork: AudioTrack.PERFORMANCE_MODE_LOW_LATENCY for media (as Open Headunit). */
     private val lowLatencyAudioTrack: Boolean = false,
     /** Legacy fork: soft clipper on all media output, independent of the equalizer. */
@@ -437,6 +439,7 @@ class AndroidMediaSink(
         videoHeight,
         preferSoftwareHevcDecoder,
         lowLatency = lowLatencyVideo,
+        frameRate = videoFrameRate,
         requestKeyFrame = { requestVideoRecovery(type) },
         report = { videoDiagnosticHandlers[type]?.invoke(it) },
         statsLabel = statsLabel,
@@ -474,9 +477,11 @@ private class VideoDecoder(
     private val report: (String) -> Unit,
     statsLabel: String? = null,
     private val lowLatency: Boolean = false,
+    private val frameRate: Int = 30,
 ) : Closeable {
     private val queue = VideoDecodeQueue()
     private var droppedStaleOutputs = 0L
+    private var activeTierLabel = "none"
     @Volatile private var running = true
     @Volatile private var decoder: MediaCodec? = null
     private var outputSurface: Surface? = surface
@@ -582,7 +587,13 @@ private class VideoDecoder(
         }
         // Some vendor decoders (e.g. MediaTek c2.mtk.avc.decoder) reject the tuned
         // parameters with BAD_VALUE. Fall back to a minimal format, then to software.
-        val attempts = listOf(
+        // Low-latency keys ride a ladder (after Open Headunit's DecoderConfigLadder): a rejected
+        // vendor key must cost one retry, not the session. Tier 2 adds MediaTek's no-reorder and
+        // motion-interpolation-off switches, tier 1 the low-latency hint alone, tier 0 nothing.
+        val attempts = (if (lowLatency) listOf(
+            DecoderAttempt(codecName = null, tuned = true, tier = 2),
+            DecoderAttempt(codecName = null, tuned = true, tier = 1),
+        ) else emptyList()) + listOf(
             DecoderAttempt(codecName = null, tuned = true),
             DecoderAttempt(codecName = null, tuned = false),
         ) + softwareDecoderName(mime)?.let { listOf(DecoderAttempt(it, tuned = false)) }.orEmpty()
@@ -606,20 +617,34 @@ private class VideoDecoder(
         }
     }
 
-    private data class DecoderAttempt(val codecName: String?, val tuned: Boolean)
+    private data class DecoderAttempt(val codecName: String?, val tuned: Boolean, val tier: Int = 0)
 
-    private fun buildFormat(mime: String, csd: List<ByteArray>, tuned: Boolean): MediaFormat =
+    /**
+     * Input buffer size derived from the picture (ExoPlayer's rule: macroblock-aligned 4:2:0
+     * samples over the minimum compression ratio). KEY_MAX_INPUT_SIZE sizes the component's whole
+     * input port; the previous fixed 8 MiB cost a 1 GB MediaTek unit about 64 MiB of graphics memory.
+     */
+    private fun derivedMaxInputSize(): Int {
+        val mbWidth = (width + 15) / 16; val mbHeight = (height + 15) / 16
+        val samples = mbWidth.toLong() * mbHeight * 256
+        val derived = samples * 3 / (2 * 2)
+        val cap = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) 1L * 1024 * 1024 else 2L * 1024 * 1024
+        return maxOf(derived, 128L * 1024).coerceAtMost(cap).toInt()
+    }
+
+    private fun buildFormat(mime: String, csd: List<ByteArray>, tuned: Boolean, tier: Int = 0): MediaFormat =
         MediaFormat.createVideoFormat(mime, width, height).apply {
-            if (tuned) {
-                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_SIZE)
+            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, derivedMaxInputSize())
+            if (tuned) setInteger(MediaFormat.KEY_PRIORITY, 0)
+            if (tier >= 1) {
+                setInteger("vdec-lowlatency", 1)             // MediaTek: OMX.MTK.index.param.video.LowLatencyDecode
+                setInteger("vendor.low-latency.enable", 1)   // Amlogic spelling; unknown keys are ignored
                 setInteger(MediaFormat.KEY_PRIORITY, 0)
+                if (frameRate > 0) setInteger(MediaFormat.KEY_OPERATING_RATE, frameRate)
             }
-            if (lowLatency) {
-                // Vendor hints: MediaTek honours "vdec-lowlatency"; others ignore unknown keys.
-                setInteger("vdec-lowlatency", 1)
-                setInteger("vendor.low-latency.enable", 1)
-                setInteger(MediaFormat.KEY_PRIORITY, 0)
-                setInteger(MediaFormat.KEY_OPERATING_RATE, 60)
+            if (tier >= 2) {
+                setInteger("vdec-no-record", 1)              // MediaTek output no-reorder mode
+                setInteger("use-clearmotion-mode", 0)        // MediaTek motion interpolation: a latency adder
             }
             csd.forEachIndexed { index, bytes -> setByteBuffer("csd-$index", ByteBuffer.wrap(bytes)) }
         }
@@ -632,15 +657,17 @@ private class VideoDecoder(
     ): MediaCodec? {
         var candidate: MediaCodec? = null
         return try {
-            val format = buildFormat(mime, csd, attempt.tuned)
+            val format = buildFormat(mime, csd, attempt.tuned, attempt.tier)
             val codec = attempt.codecName?.let { MediaCodec.createByCodecName(it) } ?: createDecoder(mime)
             candidate = codec
-            if ((attempt.tuned || lowLatency) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            if ((attempt.tuned || attempt.tier > 0) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 codec.codecInfo.getCapabilitiesForType(mime).isFeatureSupported("low-latency")) {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
             codec.configure(format, surface, null, 0)
             codec.start()
+            activeTierLabel = when (attempt.tier) { 2 -> "vendor+reorder"; 1 -> "vendor"; else -> "none" }
+            report("decoder tier=$activeTierLabel tuned=${attempt.tuned} maxInputSize=${derivedMaxInputSize()} operatingRate=${if (attempt.tier > 0) frameRate else "unset"}")
             codec
         } catch (error: Exception) {
             runCatching { candidate?.release() }
@@ -758,13 +785,15 @@ private class VideoDecoder(
 
     private fun drainOutput(codec: MediaCodec) {
         val info = MediaCodec.BufferInfo()
-        // Low latency: when several decoded frames are waiting, only the newest is shown; the
-        // older ones would only be displayed late. A UI stream has no motion to interpolate.
-        var pending = -1
-        var pendingEos = false
-        fun flushPending(render: Boolean) {
-            if (pending < 0) return
-            codec.releaseOutputBuffer(pending, render)
+        // Low latency: one decoded frame waiting ahead of the display is ordinary pipeline depth
+        // (releaseOutputBuffer returns before vsync), so nothing is discarded until a third frame
+        // is ready; only a genuine burst after a stall reaches the discard path. Discarded frames
+        // are already decoded, so dropping them cannot corrupt what follows.
+        val ready = IntArray(MAX_CATCHUP + 1)
+        var readyCount = 0
+        var sawEos = false
+        fun renderOne(index: Int, render: Boolean) {
+            codec.releaseOutputBuffer(index, render)
             if (render) {
                 stats.onRendered()
                 if (!renderedFrameLogged) {
@@ -776,34 +805,34 @@ private class VideoDecoder(
                 droppedStaleOutputs++
                 if (droppedStaleOutputs == 1L || droppedStaleOutputs % 500 == 0L) report("low-latency dropped stale frames total=$droppedStaleOutputs")
             }
-            pending = -1
+        }
+        fun flushReady() {
+            if (readyCount == 0) return
+            val render = outputSurface != null
+            val skipOlder = lowLatency && readyCount > 2
+            for (i in 0 until readyCount - 1) renderOne(ready[i], render && !skipOlder)
+            renderOne(ready[readyCount - 1], render)
+            readyCount = 0
         }
         while (running) {
             val index = codec.dequeueOutputBuffer(info, 0)
             when {
-                index == MediaCodec.INFO_TRY_AGAIN_LATER -> { flushPending(outputSurface != null); return }
+                index == MediaCodec.INFO_TRY_AGAIN_LATER -> { flushReady(); return }
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> logOutputFormat(codec.outputFormat)
                 index >= 0 -> {
-                    val render = outputSurface != null
-                    if (lowLatency) {
-                        flushPending(false)
-                        pending = index
-                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) { flushPending(render); return }
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) sawEos = true
+                    if (!lowLatency) {
+                        renderOne(index, outputSurface != null)
+                        if (sawEos) return
                     } else {
-                        codec.releaseOutputBuffer(index, render)
-                        if (render) stats.onRendered()
-                        if (render && !renderedFrameLogged) {
-                            renderedFrameLogged = true
-                            report("first frame rendered")
-                            Log.i(TAG, "video decoder rendered first frame bytes=${info.size}")
-                        }
-                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+                        ready[readyCount++] = index
+                        if (readyCount > MAX_CATCHUP || sawEos) { flushReady(); if (sawEos) return }
                     }
                 }
-                else -> { flushPending(outputSurface != null); return }
+                else -> { flushReady(); return }
             }
         }
-        flushPending(outputSurface != null)
+        flushReady()
     }
 
     private fun logOutputFormat(format: MediaFormat) {
@@ -854,7 +883,8 @@ private class VideoDecoder(
 
     private companion object {
         const val TAG = "xcertplay-usb"
-        const val MAX_INPUT_SIZE = 8 * 1024 * 1024
+        const val MAX_INPUT_SIZE = 8 * 1024 * 1024 // superseded by derivedMaxInputSize()
+        const val MAX_CATCHUP = 8
         const val INPUT_TIMEOUT_US = 10_000L
         const val MAX_FRAME_AGE_NS = 250_000_000L
         val START_CODE = byteArrayOf(0x00, 0x00, 0x00, 0x01)

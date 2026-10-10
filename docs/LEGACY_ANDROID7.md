@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.17)
+## Fork features (0.2.13-legacy24.18)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,15 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Video decoder sizing and ladder from Open Headunit (24.18)**:
+  KEY_MAX_INPUT_SIZE is derived from the picture (macroblock-aligned 4:2:0
+  samples / 2, floor 128 KiB, cap 1 MiB below API 28) instead of a fixed
+  8 MiB, which on a 1 GB MediaTek unit meant about 64 MiB of graphics memory
+  for input buffers alone. Low-latency keys ride a configure ladder (tier 2:
+  vdec-lowlatency + vdec-no-record=1 + use-clearmotion-mode=0; tier 1:
+  vdec-lowlatency; tier 0: none), the operating-rate hint is the negotiated
+  frame rate, and newest-frame catch-up discards only from the third ready
+  frame on (one frame ahead of the display is ordinary pipeline depth).
 - **Audio path options from Open Headunit (24.17)**: "Legacy music stream
   routing" (media channel 3 = STREAM_MUSIC instead of usage attributes),
   "Low-latency audio track" (AudioTrack.PERFORMANCE_MODE_LOW_LATENCY on API
