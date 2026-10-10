@@ -39,7 +39,23 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.23)
+## Fork features (0.2.13-legacy24.24)
+
+24.24: DSP core brought to car-audio grade
+- Double-precision processing end to end, quantised once at the output with
+  TPDF dither (±1 LSB triangular) instead of truncation.
+- Peaking filters use Orfanidis' prescribed-Nyquist-gain design: bells at
+  12–16 kHz keep their analog shape instead of collapsing against Nyquist.
+- Graphic EQ is constant-Q from the band spacing and iteratively corrects
+  neighbour interaction, so the composite response hits the slider values.
+- Coefficient interpolation over ~30 ms (64-frame chunks) removes zipper
+  noise while dragging sliders.
+- The limiter is a 2 ms look-ahead peak limiter (linear attack ramp, 80 ms
+  release) with the soft knee kept only as a safety stage, so limiting no
+  longer bends the waveform. Auto level now follows an RMS envelope
+  (−16 dBFS target).
+- Cost: the same per-sample work as before plus the limiter's O(1) pass; still
+  a few percent of one core with everything on.
 
 24.23: sound processing beyond the graphic EQ
 - `EqualizerDsp` is now a chain: subsonic high-pass (two cascaded Butterworth
