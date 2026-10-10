@@ -18,13 +18,14 @@ object MediaAudioBuffer {
     data class Plan(val trackBufferBytes: Int, val startBytes: Int)
 
     /** AudioTrack capacity and the amount to queue before play() for one output stream. */
-    fun plan(isMedia: Boolean, sampleRate: Int, channels: Int, minBufferBytes: Int, mediaMillis: Int): Plan {
+    fun plan(isMedia: Boolean, sampleRate: Int, channels: Int, minBufferBytes: Int, mediaMillis: Int, sampleBytes: Int = 2): Plan {
         val lowLatency = Plan(
-            trackBufferBytes = maxOf(minBufferBytes * 4, MIN_TRACK_BUFFER_BYTES),
-            startBytes = maxOf(minBufferBytes, MIN_START_BUFFER_BYTES),
+            trackBufferBytes = maxOf(minBufferBytes * 4, MIN_TRACK_BUFFER_BYTES * sampleBytes / 2),
+            startBytes = maxOf(minBufferBytes, MIN_START_BUFFER_BYTES * sampleBytes / 2),
         )
         if (!isMedia) return lowLatency
-        val bytesPerSecond = sampleRate.toLong() * channels.coerceIn(1, 2) * 2
+        // Legacy fork: float tracks carry 4 bytes per sample; the time-based sizes scale with it.
+        val bytesPerSecond = sampleRate.toLong() * channels.coerceIn(1, 2) * sampleBytes
         val start = (bytesPerSecond * sanitize(mediaMillis) / 1000).toInt()
         val capacity = (bytesPerSecond * (sanitize(mediaMillis) + HEADROOM_MILLIS) / 1000).toInt()
         return Plan(

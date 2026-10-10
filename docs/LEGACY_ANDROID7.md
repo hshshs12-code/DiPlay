@@ -39,7 +39,13 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.27)
+## Fork features (0.2.13-legacy24.28)
+
+24.28: float track buffer sized correctly
+- The on-car log showed the float media track at 684 ms instead of the
+  configured 500 ms: 24.25 doubled the whole plan, including the already
+  float-sized minimum buffer. `MediaAudioBuffer.plan` now takes the sample size
+  and scales only the time-based part.
 
 24.27: iPod identification accepted
 - First on-car report (24.26): config switch, HID link (reports 0x1–0xc in,

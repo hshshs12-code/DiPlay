@@ -1117,9 +1117,7 @@ private class AudioRenderer(
         val streamOverride = channelOverride(selection.channel)
         var attributes = audioAttributesFor(selection, streamOverride)
         trackAttributes = attributes
-        val plan = MediaAudioBuffer.plan(isMedia, outRate, format.channels, minBuffer, mediaBufferMillis).let {
-            if (sampleBytes == 4) MediaAudioBuffer.Plan(it.trackBufferBytes * 2, it.startBytes * 2) else it
-        }
+        val plan = MediaAudioBuffer.plan(isMedia, outRate, format.channels, minBuffer, mediaBufferMillis, sampleBytes)
         bytesPerSecond = outRate * frameBytes
         val built: AudioTrack
         var routeLabel: String
