@@ -74,6 +74,8 @@ object IpodAudioEngine {
     @Volatile var shuffle: Int? = null; private set
     @Volatile var repeat: Int? = null; private set
     @Volatile var power = IpodPowerState(); private set
+    /** What the accepted identification still offers (media remote, app launch, seek). */
+    @Volatile var capabilities = com.shilapi.xcertplay.ipod.Iap2IpodMessages.capabilities(0); private set
     @Volatile var volume: Float = 1f
     @Volatile var gainBoost: Boolean = false
     @Volatile var muted: Boolean = false
@@ -139,6 +141,7 @@ object IpodAudioEngine {
         volume = IpodSettings.volume(app); gainBoost = IpodSettings.gainBoost(app)
         identified = false; authenticated = false; audioActive = false; sampleRate = 0; framesPlayed = 0; underruns = 0
         nowPlaying = CarPlayNowPlaying(); artwork = null; shuffle = null; repeat = null; power = IpodPowerState()
+        capabilities = com.shilapi.xcertplay.ipod.Iap2IpodMessages.capabilities(0)
         synchronized(traceCounts) { traceCounts.clear() }
         worker = Thread({
             ThreadPriorities.transport()
@@ -215,7 +218,8 @@ object IpodAudioEngine {
                             Iap2IpodClient.Stage.AUTHENTICATING -> { identified = true; set(app, State.AUTHENTICATING, "Authenticating (MFi)…") }
                             Iap2IpodClient.Stage.READY -> {
                                 identified = true; authenticated = true
-                                set(app, State.READY, "Connected. Waiting for the iPhone to start USB audio…")
+                                capabilities = client?.capabilities ?: capabilities
+                                set(app, State.READY, "Connected${if (capabilities.hid) "" else " (limited: ${capabilities.describe()})"}. Waiting for the iPhone to start USB audio…")
                                 scheduleAudioFallback(app)
                             }
                         }

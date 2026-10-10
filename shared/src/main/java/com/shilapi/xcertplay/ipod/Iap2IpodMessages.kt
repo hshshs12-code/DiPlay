@@ -73,8 +73,6 @@ object Iap2IpodMessages {
     const val ACCESSORY_HID_REPORT = 0x6802
     const val STOP_HID = 0x6803
     const val REQUEST_APP_LAUNCH = 0xea02
-    const val DEVICE_INFORMATION_UPDATE = 0x4e0d
-    const val DEVICE_LANGUAGE_UPDATE = 0x4e0e
 
     const val USB_TRANSPORT_COMPONENT_ID = 1
     const val HID_COMPONENT_ID = 2
@@ -88,20 +86,50 @@ object Iap2IpodMessages {
 
     fun sampleRateFromCode(code: Int): Int? = SAMPLE_RATE_CODES.entries.firstOrNull { it.value == code }?.key
 
-    val MESSAGES_SENT = intArrayOf(
-        AUTHENTICATION_CERTIFICATE, AUTHENTICATION_RESPONSE,
-        START_NOW_PLAYING_UPDATES, STOP_NOW_PLAYING_UPDATES, SET_NOW_PLAYING_INFORMATION,
-        START_POWER_UPDATES, STOP_POWER_UPDATES, POWER_SOURCE_UPDATE,
-        START_USB_DEVICE_MODE_AUDIO, STOP_USB_DEVICE_MODE_AUDIO,
-        START_HID, ACCESSORY_HID_REPORT, STOP_HID,
-        REQUEST_APP_LAUNCH,
-    )
-    val MESSAGES_RECEIVED = intArrayOf(
-        REQUEST_AUTHENTICATION_CERTIFICATE, REQUEST_AUTHENTICATION_CHALLENGE_RESPONSE,
-        AUTHENTICATION_FAILED, AUTHENTICATION_SUCCEEDED,
-        NOW_PLAYING_UPDATE, POWER_UPDATE, USB_DEVICE_MODE_AUDIO_INFORMATION, DEVICE_HID_REPORT,
-        DEVICE_INFORMATION_UPDATE, DEVICE_LANGUAGE_UPDATE,
-    )
+    /**
+     * What a given identification level still offers. iOS answers IdentificationRejected with the
+     * parameter IDs it disliked but not which message inside them; the client retries down this
+     * ladder until the phone accepts, trading features for a working session.
+     */
+    data class Capabilities(val hid: Boolean, val appLaunch: Boolean, val setNowPlaying: Boolean, val power: Boolean) {
+        fun describe(): String = listOfNotNull(
+            if (hid) null else "no media remote", if (appLaunch) null else "no app launch",
+            if (setNowPlaying) null else "no seek/shuffle", if (power) null else "no power updates",
+        ).joinToString(", ").ifEmpty { "full" }
+    }
+
+    const val MAX_LEVEL = 4
+    fun capabilities(level: Int): Capabilities = when (level.coerceIn(0, MAX_LEVEL)) {
+        0 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true)
+        1 -> Capabilities(hid = true, appLaunch = false, setNowPlaying = false, power = true)
+        2 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = true)
+        3 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = false)
+        else -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = false)
+    }
+
+    fun messagesSent(level: Int): IntArray {
+        val c = capabilities(level)
+        val list = mutableListOf(AUTHENTICATION_CERTIFICATE, AUTHENTICATION_RESPONSE, START_NOW_PLAYING_UPDATES, STOP_NOW_PLAYING_UPDATES,
+            START_USB_DEVICE_MODE_AUDIO, STOP_USB_DEVICE_MODE_AUDIO)
+        if (c.power) list += listOf(START_POWER_UPDATES, STOP_POWER_UPDATES, POWER_SOURCE_UPDATE)
+        if (c.setNowPlaying) list += SET_NOW_PLAYING_INFORMATION
+        if (c.hid) list += listOf(START_HID, ACCESSORY_HID_REPORT, STOP_HID)
+        if (c.appLaunch) list += REQUEST_APP_LAUNCH
+        return list.toIntArray()
+    }
+
+    fun messagesReceived(level: Int): IntArray {
+        val c = capabilities(level)
+        val list = mutableListOf(REQUEST_AUTHENTICATION_CERTIFICATE, REQUEST_AUTHENTICATION_CHALLENGE_RESPONSE,
+            AUTHENTICATION_FAILED, AUTHENTICATION_SUCCEEDED, NOW_PLAYING_UPDATE, USB_DEVICE_MODE_AUDIO_INFORMATION)
+        if (c.power) list += POWER_UPDATE
+        if (c.hid) list += DEVICE_HID_REPORT
+        return list.toIntArray()
+    }
+
+    /** Level-0 lists, kept for callers that want the full set. */
+    val MESSAGES_SENT: IntArray get() = messagesSent(0)
+    val MESSAGES_RECEIVED: IntArray get() = messagesReceived(0)
 
     /**
      * Consumer-control report descriptor for the iAP2 "Media Playback Remote" HID component: one
@@ -127,17 +155,18 @@ object Iap2IpodMessages {
         0xc0.toByte(),          // End Collection
     )
 
-    /** IdentificationInformation for a USB-device-transport audio accessory with a media remote. */
-    fun identificationInformation(config: Iap2IpodConfig): Iap2Frame = Iap2Messages.buildRaw(IDENTIFICATION_INFORMATION) {
+    /** IdentificationInformation for a USB-device-transport audio accessory, at the given fallback [level]. */
+    fun identificationInformation(config: Iap2IpodConfig, level: Int = 0): Iap2Frame = Iap2Messages.buildRaw(IDENTIFICATION_INFORMATION) {
+        val c = capabilities(level)
         string(0, config.name)
         string(1, config.modelIdentifier)
         string(2, config.manufacturer)
         string(3, config.serialNumber)
         string(4, config.firmwareVersion)
         string(5, config.hardwareVersion)
-        u16List(6, MESSAGES_SENT.asIterable())
-        u16List(7, MESSAGES_RECEIVED.asIterable())
-        u8(8, 2)   // PowerProvidingCapability: advanced (we send PowerSourceUpdate)
+        u16List(6, messagesSent(level).asIterable())
+        u16List(7, messagesReceived(level).asIterable())
+        u8(8, if (c.power) 2 else 0)   // PowerProvidingCapability: advanced when we send PowerSourceUpdate
         u16(9, 0)  // MaximumCurrentDrawnFromDevice
         string(12, config.language)
         strings(13, listOf(config.language))
@@ -147,7 +176,7 @@ object Iap2IpodMessages {
             void(2) // TransportSupportsiAP2Connection
             config.sampleRates.forEach { u8(3, SAMPLE_RATE_CODES.getValue(it)) }
         }
-        group(18) { // iAP2HIDComponent
+        if (c.hid) group(18) { // iAP2HIDComponent
             u16(0, HID_COMPONENT_ID)
             string(1, "Media Remote")
             u8(2, 1) // HIDComponentFunction: media playback remote

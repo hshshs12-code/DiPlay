@@ -231,7 +231,8 @@ class IpodModeActivity : Activity() {
         titleView.text = info.title ?: if (IpodAudioEngine.state == IpodAudioEngine.State.READY) "Nothing playing" else "iPhone as a USB music source"
         artistView.text = info.artist ?: if (IpodAudioEngine.state == IpodAudioEngine.State.READY) "Start playback on the phone, or open an app below." else "Plug the iPhone in, unlock it, then tap Start."
         albumView.text = info.album ?: ""
-        appView.text = listOfNotNull(info.sourceApp, shuffleText(), repeatText()).joinToString(" · ")
+        appView.text = listOfNotNull(info.sourceApp, shuffleText(), repeatText(),
+            if (running && IpodAudioEngine.state == IpodAudioEngine.State.READY && !IpodAudioEngine.capabilities.hid) "controls refused by the iPhone: use the phone or Siri" else null).joinToString(" · ")
         val art = IpodAudioEngine.artwork
         if (art !== shownArtwork) {
             shownArtwork = art
@@ -245,6 +246,10 @@ class IpodModeActivity : Activity() {
         }
         durationView.text = clock(duration)
         playPause.text = if (IpodAudioEngine.playing) "⏸" else "▶"
+        val caps = IpodAudioEngine.capabilities
+        val controlsOn = !running || caps.hid
+        listOf(playPause, shuffleButton, repeatButton).forEach { it.alpha = if (controlsOn) 1f else 0.4f }
+        progress.isEnabled = !running || caps.setNowPlaying
         style(shuffleButton, (IpodAudioEngine.shuffle ?: 0) != 0)
         style(repeatButton, (IpodAudioEngine.repeat ?: 0) != 0)
         repeatButton.text = when (IpodAudioEngine.repeat) { 1 -> "Repeat 1"; 2 -> "Repeat all"; else -> "Repeat" }

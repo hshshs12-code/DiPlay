@@ -43,6 +43,9 @@ class Iap2IpodClient(
     @Volatile var power = IpodPowerState(); private set
     @Volatile var shuffle: Int? = null; private set
     @Volatile var repeat: Int? = null; private set
+    /** Identification fallback level reached; 0 = everything offered. */
+    @Volatile var level = 0; private set
+    val capabilities: Iap2IpodMessages.Capabilities get() = Iap2IpodMessages.capabilities(level)
 
     /** Blocks until [isCancelled] or the link ends; throws on protocol failure. */
     fun run(isCancelled: () -> Boolean, linkTimeoutMillis: Long = LINK_TIMEOUT_MILLIS) {
@@ -72,15 +75,15 @@ class Iap2IpodClient(
     // ---- commands from the UI (thread-safe, sent by the control loop) ----
 
     fun press(key: IpodHidKey) {
-        if (!ready) return
+        if (!ready || !capabilities.hid) return
         outgoing.add(Command(Iap2IpodMessages.hidReport(1 shl key.bit), pauseAfterMillis = 60))
         outgoing.add(Command(Iap2IpodMessages.hidReport(0)))
     }
 
-    fun seek(elapsedMillis: Long) { if (ready) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(elapsedMillis = elapsedMillis.coerceAtLeast(0)))) }
-    fun setShuffle(mode: Int) { if (ready) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(shuffle = mode))) }
-    fun setRepeat(mode: Int) { if (ready) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(repeat = mode))) }
-    fun launchApp(bundleId: String) { if (ready) outgoing.add(Command(Iap2IpodMessages.requestAppLaunch(bundleId))) }
+    fun seek(elapsedMillis: Long) { if (ready && capabilities.setNowPlaying) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(elapsedMillis = elapsedMillis.coerceAtLeast(0)))) }
+    fun setShuffle(mode: Int) { if (ready && capabilities.setNowPlaying) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(shuffle = mode))) }
+    fun setRepeat(mode: Int) { if (ready && capabilities.setNowPlaying) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(repeat = mode))) }
+    fun launchApp(bundleId: String) { if (ready && capabilities.appLaunch) outgoing.add(Command(Iap2IpodMessages.requestAppLaunch(bundleId))) }
     fun restartAudio() { if (ready) outgoing.add(Command(Iap2IpodMessages.startUsbDeviceModeAudio())) }
 
     private fun drainOutgoing() {
@@ -96,8 +99,8 @@ class Iap2IpodClient(
     private fun handle(frame: Iap2Frame) {
         when (frame.messageId) {
             Iap2IpodMessages.START_IDENTIFICATION -> {
-                listener.onProgress("iap2 rx 1d00 start-identification → sending accessory identity (usb device audio + media remote)")
-                send(Iap2IpodMessages.identificationInformation(config))
+                listener.onProgress("iap2 rx 1d00 start-identification → sending accessory identity level=$level (${capabilities.describe()})")
+                send(Iap2IpodMessages.identificationInformation(config, level))
             }
             Iap2IpodMessages.IDENTIFICATION_ACCEPTED -> {
                 identified = true
@@ -107,7 +110,12 @@ class Iap2IpodClient(
             }
             Iap2IpodMessages.IDENTIFICATION_REJECTED -> {
                 val ids = runCatching { Iap2BodyReader.of(frame).list().map { "0x${it.id.toString(16)}" } }.getOrDefault(emptyList())
-                throw IphoneUsbException.Protocol("The iPhone rejected the accessory identification (parameters $ids)")
+                if (level >= Iap2IpodMessages.MAX_LEVEL) {
+                    throw IphoneUsbException.Protocol("The iPhone rejected every accessory identification profile (last rejected parameters $ids)")
+                }
+                level++
+                listener.onProgress("iap2 rx 1d03 identification rejected parameters $ids → retrying with level=$level (${capabilities.describe()})")
+                send(Iap2IpodMessages.identificationInformation(config, level))
             }
             Iap2IpodMessages.REQUEST_AUTHENTICATION_CERTIFICATE -> {
                 val certificate = mfi.readCertificate()
@@ -155,12 +163,12 @@ class Iap2IpodClient(
     private fun maybeReady() {
         if (ready || !identified || !authenticated) return
         ready = true
-        send(Iap2IpodMessages.powerSourceUpdate(config))
-        send(Iap2IpodMessages.startPowerUpdates())
+        val c = capabilities
+        if (c.power) { send(Iap2IpodMessages.powerSourceUpdate(config)); send(Iap2IpodMessages.startPowerUpdates()) }
         send(Iap2IpodMessages.startNowPlayingUpdates())
-        send(Iap2IpodMessages.startHid())
+        if (c.hid) send(Iap2IpodMessages.startHid())
         send(Iap2IpodMessages.startUsbDeviceModeAudio())
-        listener.onProgress("iap2 tx ae03 power ${config.availableCurrentMilliAmps}mA, ae00, 5000, 6800 media remote, da00 start usb audio")
+        listener.onProgress("iap2 ready level=$level (${c.describe()}): sent ${if (c.power) "ae03 power ${config.availableCurrentMilliAmps}mA, ae00, " else ""}5000 now playing, ${if (c.hid) "6800 media remote, " else ""}da00 start usb audio")
         listener.onStage(Stage.READY)
     }
 

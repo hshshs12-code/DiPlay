@@ -39,7 +39,21 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.26)
+## Fork features (0.2.13-legacy24.27)
+
+24.27: iPod identification accepted
+- First on-car report (24.26): config switch, HID link (reports 0x1–0xc in,
+  0xd–0x15 out) and iAP2 sync all worked; the iPhone rejected
+  IdentificationInformation parameters 6/7. Cause: 0x4E0D/0x4E0E (wireless
+  CarPlay notifications) were wrongly declared as received messages. Removed.
+- Identification fallback ladder: on IdentificationRejected the client resends
+  a reduced identity (level 1 drops app launch + SetNowPlayingInformation,
+  level 2 drops the HID media remote, level 3 drops power, level 4 minimal)
+  instead of failing. `Capabilities` reflect what the accepted level offers;
+  controls the phone refused are greyed on the iPod screen.
+- The phone's audio format seen on the car: interface 1 alt 1, stereo 16-bit,
+  8–48 kHz, iso IN 0x81, 192-byte packets, 1 ms interval — exactly what the
+  direct driver targets.
 
 24.26: media-volume pin only after the knob is known to be hardware
 - `AudioPath.pinVolume` does nothing while the knob type is UNKNOWN (24.25

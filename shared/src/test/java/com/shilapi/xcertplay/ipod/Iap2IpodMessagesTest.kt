@@ -20,6 +20,8 @@ class Iap2IpodMessagesTest {
         assertTrue(sent.containsAll(listOf(0xaa01, 0xaa03, 0xda00, 0x6800, 0x6802, 0x5000, 0xae03)))
         val received = body.u16List(7)
         assertTrue(received.containsAll(listOf(0xaa00, 0xaa02, 0xda01, 0x5001, 0xae01)))
+        // Wireless-CarPlay notifications must never be declared by the USB iPod accessory.
+        assertTrue(!received.contains(0x4e0d) && !received.contains(0x4e0e))
         val usb = body.group(15)
         assertEquals(1, usb.u16(0))
         assertTrue(usb.void(2))
@@ -27,6 +29,20 @@ class Iap2IpodMessagesTest {
         val hid = body.group(18)
         assertEquals(2, hid.u16(0))
         assertEquals(1, hid.u8(2))
+    }
+
+    @Test
+    fun fallbackLevelsShedFeaturesInOrder() {
+        val level2 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 2))
+        assertTrue(!level2.u16List(6).contains(0x6800) && !level2.u16List(6).contains(0xea02) && !level2.u16List(6).contains(0x5003))
+        assertTrue(level2.u16List(6).contains(0xae03) && level2.u16List(6).contains(0xda00))
+        assertTrue(!level2.has(18))
+        val level3 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 3))
+        assertTrue(!level3.u16List(6).contains(0xae03) && !level3.u16List(7).contains(0xae01))
+        assertEquals(0, level3.u8(8))
+        assertTrue(level3.u16List(6).containsAll(listOf(0xaa01, 0xaa03, 0x5000, 0xda00)))
+        assertEquals("no media remote, no app launch, no seek/shuffle, no power updates", Iap2IpodMessages.capabilities(3).describe())
+        assertEquals("full", Iap2IpodMessages.capabilities(0).describe())
     }
 
     @Test
