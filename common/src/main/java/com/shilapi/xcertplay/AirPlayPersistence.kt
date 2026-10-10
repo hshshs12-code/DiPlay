@@ -181,35 +181,55 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("usb_auto_launch", enabled).apply()
     }
 
+    // Legacy fork: one master switch for every tuning option. Off = upstream behaviour everywhere.
+    fun loadForkTuning(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("fork_tuning", true)
+    fun saveForkTuning(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("fork_tuning", enabled).apply()
+    }
+    private fun tuned(context: Context, key: String, default: Boolean = true): Boolean =
+        loadForkTuning(context) && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(key, default)
+    private fun saveTuned(context: Context, key: String, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(key, enabled).apply()
+    }
+    fun loadLegacyMusicRoute(context: Context) = tuned(context, "legacy_music_route")
+    fun saveLegacyMusicRoute(context: Context, enabled: Boolean) = saveTuned(context, "legacy_music_route", enabled)
+    fun loadSustainedPerformance(context: Context) = tuned(context, "sustained_performance")
+    fun saveSustainedPerformance(context: Context, enabled: Boolean) = saveTuned(context, "sustained_performance", enabled)
+    fun loadVideoSocketOptions(context: Context) = tuned(context, "video_socket_options")
+    fun saveVideoSocketOptions(context: Context, enabled: Boolean) = saveTuned(context, "video_socket_options", enabled)
+    fun loadFeedWait(context: Context) = tuned(context, "video_feed_wait")
+    fun saveFeedWait(context: Context, enabled: Boolean) = saveTuned(context, "video_feed_wait", enabled)
+    fun loadSessionWakeLock(context: Context) = tuned(context, "session_wake_lock")
+    fun saveSessionWakeLock(context: Context, enabled: Boolean) = saveTuned(context, "session_wake_lock", enabled)
+    /** Raw sub-setting value, for the toggles' displayed state while the master switch is off. */
+    fun rawTuned(context: Context, key: String, default: Boolean = true): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(key, default)
+
     // Legacy fork: audio output path options (as Open Headunit).
-    fun loadLowLatencyAudioTrack(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("low_latency_audio_track", false)
+    fun loadLowLatencyAudioTrack(context: Context): Boolean = tuned(context, "low_latency_audio_track")
     fun saveLowLatencyAudioTrack(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("low_latency_audio_track", enabled).apply()
     }
-    fun loadSoftClipMedia(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("soft_clip_media", false)
+    fun loadSoftClipMedia(context: Context): Boolean = tuned(context, "soft_clip_media")
     fun saveSoftClipMedia(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("soft_clip_media", enabled).apply()
     }
 
     // Legacy fork: uncompressed main audio.
-    fun loadPreferPcmAudio(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("prefer_pcm_audio", false)
+    fun loadPreferPcmAudio(context: Context): Boolean = tuned(context, "prefer_pcm_audio")
     fun savePreferPcmAudio(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("prefer_pcm_audio", enabled).apply()
     }
 
     // Legacy fork: video latency options.
-    fun loadLowLatencyVideo(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("low_latency_video", true)
+    fun loadLowLatencyVideo(context: Context): Boolean = tuned(context, "low_latency_video")
 
     fun saveLowLatencyVideo(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("low_latency_video", enabled).apply()
     }
 
-    fun loadSurfaceViewOutput(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("surfaceview_output", false)
+    fun loadSurfaceViewOutput(context: Context): Boolean = tuned(context, "surfaceview_output")
 
     fun saveSurfaceViewOutput(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("surfaceview_output", enabled).apply()
@@ -261,10 +281,12 @@ object AirPlayPersistence {
             .apply()
     }
 
-    fun loadMediaAudioChannel(context: Context): Int =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    fun loadMediaAudioChannel(context: Context): Int {
+        if (loadLegacyMusicRoute(context)) return 3 // legacy fork: STREAM_MUSIC routing while tuned
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getInt(KEY_MEDIA_AUDIO_CHANNEL, 0)
             .takeIf { it in AUDIO_CHANNELS } ?: 0
+    }
 
     fun saveMediaAudioChannel(context: Context, channel: Int) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()

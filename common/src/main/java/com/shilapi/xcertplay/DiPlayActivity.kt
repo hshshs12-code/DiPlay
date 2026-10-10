@@ -708,25 +708,30 @@ class DiPlayActivity : ComponentActivity() {
                 bufferPresets.indexOf(AirPlayPersistence.loadMediaBufferMillis(this)).coerceAtLeast(0)) {
                 AirPlayPersistence.saveMediaBufferMillis(this, bufferPresets[it])
             }
-            toggle(card, "Uncompressed music (PCM, experimental)", "Asks the iPhone to send music as raw PCM instead of AAC, so the head unit decodes nothing. About 1.5 Mbit/s; fine on USB, usually fine on Wi-Fi Direct. If the iPhone refuses, music stays silent: turn this off again. Reconnects CarPlay.",
-                AirPlayPersistence.loadPreferPcmAudio(this)) {
-                AirPlayPersistence.savePreferPcmAudio(this, it)
+            // ---- Legacy fork tuning: one master switch, sub-options below it ----
+            val tuning = AirPlayPersistence.loadForkTuning(this)
+            toggle(card, "Fork performance tuning (master)", "On: every option below is active (defaults from this fork and Open Headunit's MediaTek findings). Off: upstream DiPlay behaviour everywhere, sub-options ignored. Reconnects CarPlay.",
+                tuning) {
+                AirPlayPersistence.saveForkTuning(this, it)
+                render()
                 reconnectForClusterMap()
             }
-            toggle(card, "Legacy music stream routing", "Plays music on Android's classic STREAM_MUSIC route instead of usage-based attributes, the path Open Headunit uses. Reconnects CarPlay.",
-                AirPlayPersistence.loadMediaAudioChannel(this) == 3) {
-                AirPlayPersistence.saveMediaAudioChannel(this, if (it) 3 else 0)
-                reconnectForClusterMap()
+            fun sub(title: String, description: String, key: String, reconnect: Boolean = true, onSave: (Boolean) -> Unit) {
+                toggle(card, title, description, AirPlayPersistence.rawTuned(this, key), enabled = tuning) { v ->
+                    onSave(v)
+                    if (reconnect) reconnectForClusterMap()
+                }
             }
-            toggle(card, "Low-latency audio track", "Requests Android's low-latency output mode for music (as Open Headunit). Reconnects CarPlay.",
-                AirPlayPersistence.loadLowLatencyAudioTrack(this)) {
-                AirPlayPersistence.saveLowLatencyAudioTrack(this, it)
-                reconnectForClusterMap()
-            }
-            toggle(card, "Soft clipper on music", "Rounds off peaks above 80% instead of hard clipping, like Open Headunit's mixer. Applies on the next track.",
-                AirPlayPersistence.loadSoftClipMedia(this)) {
-                AirPlayPersistence.saveSoftClipMedia(this, it)
-            }
+            sub("Uncompressed music (PCM)", "Offers the iPhone only PCM for music so the head unit decodes nothing (as Open Headunit does for Android Auto). About 1.5 Mbit/s. If music goes silent the iPhone refused: turn it off.", "prefer_pcm_audio") { AirPlayPersistence.savePreferPcmAudio(this, it) }
+            sub("Legacy music stream routing", "Plays music on Android's classic STREAM_MUSIC route instead of usage-based attributes, the path Open Headunit uses.", "legacy_music_route") { AirPlayPersistence.saveLegacyMusicRoute(this, it) }
+            sub("Low-latency audio track", "Requests Android's low-latency output mode for music.", "low_latency_audio_track") { AirPlayPersistence.saveLowLatencyAudioTrack(this, it) }
+            sub("Soft clipper on music", "Rounds off peaks above 80% instead of hard clipping. Applies on the next track.", "soft_clip_media", reconnect = false) { AirPlayPersistence.saveSoftClipMedia(this, it) }
+            sub("Low-latency video", "MediaTek low-latency, no-reorder and motion-interpolation-off decoder keys on a fallback ladder, plus newest-frame catch-up after stalls.", "low_latency_video") { AirPlayPersistence.saveLowLatencyVideo(this, it) }
+            sub("SurfaceView output", "Draws video straight to the screen, skipping a compositing step. Picture adjustments unavailable while on.", "surfaceview_output") { AirPlayPersistence.saveSurfaceViewOutput(this, it) }
+            sub("Video feed wait", "When the decoder falls behind, wait up to 1 s for it instead of discarding frames (which smears the picture until the next keyframe).", "video_feed_wait") { AirPlayPersistence.saveFeedWait(this, it) }
+            sub("Video socket tuning", "No-delay, keep-alive, low-delay priority and a bounded receive buffer on the video connection.", "video_socket_options") { AirPlayPersistence.saveVideoSocketOptions(this, it) }
+            sub("Stable CPU clock", "Asks Android for sustained performance mode during CarPlay (steady clock instead of boost/throttle). Honoured by some firmwares only.", "sustained_performance") { AirPlayPersistence.saveSustainedPerformance(this, it) }
+            sub("Hold a wake lock during CarPlay", "Resists MediaTek background power saving that slows or stops third-party apps.", "session_wake_lock") { AirPlayPersistence.saveSessionWakeLock(this, it) }
             toggle(card, getString(R.string.main_buffered_audio), getString(R.string.main_buffered_audio_description),
                 AirPlayPersistence.loadMainBufferedAudio(this)) {
                 AirPlayPersistence.saveMainBufferedAudio(this, it)
@@ -736,10 +741,6 @@ class DiPlayActivity : ComponentActivity() {
             toggle(card, getString(R.string.efficient_video), getString(R.string.use_hevc_leave_off_for_the_widest_head_unit_compatibility), AirPlayPersistence.loadHevcEnabled(this)) { AirPlayPersistence.saveHevcEnabled(this, it) }
             toggle(card, "Phone video playback (manual parked switch)", "Offers iOS 26/27 video in car to the iPhone. Playback only unlocks while you switch \"Car is parked\" on in the in-CarPlay settings (3-finger swipe). Applies on reconnect. Use only when stopped.",
                 ManualParkedVideo.enabled(this)) { ManualParkedVideo.setEnabled(this, it) }
-            toggle(card, "Low-latency video", "Asks the decoder for low-latency mode and shows only the newest decoded frame when the unit falls behind. Applies on reconnect.",
-                AirPlayPersistence.loadLowLatencyVideo(this)) { AirPlayPersistence.saveLowLatencyVideo(this, it) }
-            toggle(card, "SurfaceView output (experimental)", "Draws video straight to the screen, skipping a compositing step. Lower latency on weak GPUs; picture adjustments are unavailable. Applies on reconnect.",
-                AirPlayPersistence.loadSurfaceViewOutput(this)) { AirPlayPersistence.saveSurfaceViewOutput(this, it) }
             toggle(card, getString(R.string.right_hand_drive), getString(R.string.place_carplay_s_controls_closer_to_the_driver), AirPlayPersistence.loadRightHandDrive(this)) { AirPlayPersistence.saveRightHandDrive(this, it) }
             carPlayDockControl(card)
             toggle(card, getString(R.string.split_screen_areas), getString(R.string.split_screen_areas_description),

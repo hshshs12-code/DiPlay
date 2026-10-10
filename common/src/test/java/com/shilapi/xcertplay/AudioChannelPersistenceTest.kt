@@ -17,6 +17,8 @@ class AudioChannelPersistenceTest {
 
     @Before fun clearPreferences() {
         prefs.edit().clear().apply()
+        // Legacy fork: this test covers upstream defaults; the master tuning switch changes them.
+        AirPlayPersistence.saveForkTuning(context, false)
     }
 
     @Test fun freshInstallUsesAutomaticRouting() {

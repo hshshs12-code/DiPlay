@@ -41,6 +41,7 @@ import com.shilapi.xcertplay.mfi.MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.RemoteMfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.network.CarPlayBonjour
+import com.shilapi.xcertplay.media.ForkTuning
 import com.shilapi.xcertplay.network.diagnosticSummary
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.network.LocalOnlyHotspotManager
@@ -2543,7 +2544,14 @@ class CarPlayController(
         }
     }
 
+    private var wiredTraceLines = 0L
+
     private fun debugLog(message: String) {
+        if (message.startsWith("wired link ")) {
+            // Per-segment USB traces: hundreds per song change. Keep the first budget, then one in fifty.
+            val n = ++wiredTraceLines
+            if (n > ForkTuning.traceBudget && n % 50 != 0L) return
+        }
         Log.i(IphoneCarPlayConfiguration.TAG, message)
         try {
             uiListener?.onDebugLog(message)

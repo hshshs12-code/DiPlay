@@ -19,6 +19,9 @@ import org.robolectric.annotation.LooperMode
 @Config(sdk = [28])
 @LooperMode(LooperMode.Mode.PAUSED)
 class CarPlayHostVideoSurfaceTest {
+    // Legacy fork: this test covers upstream defaults; the master tuning switch changes them.
+    @org.junit.Before fun untuned() { com.shilapi.xcertplay.AirPlayPersistence.saveForkTuning(org.robolectric.RuntimeEnvironment.getApplication(), false) }
+
     private class AttachedTexture(activity: CarPlayHostActivity, private val accelerated: Boolean) : TextureView(activity) {
         override fun isAttachedToWindow() = true
         override fun isHardwareAccelerated() = accelerated

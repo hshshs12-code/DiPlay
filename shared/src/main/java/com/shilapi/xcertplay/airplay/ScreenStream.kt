@@ -56,6 +56,14 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         com.shilapi.xcertplay.media.ThreadPriorities.video()
         try {
             val accepted = bound.accept()
+            if (com.shilapi.xcertplay.media.ForkTuning.videoSocketOptions) runCatching {
+                accepted.tcpNoDelay = true
+                accepted.keepAlive = true
+                accepted.trafficClass = 0x10 // IPTOS_LOWDELAY
+                accepted.setPerformancePreferences(0, 2, 1)
+                // Large defaults let stale video pile up ahead of the decoder; bound it.
+                if (accepted.receiveBufferSize > 256 * 1024) accepted.receiveBufferSize = 256 * 1024
+            }
             socket = accepted
             run(accepted)
         } catch (error: Exception) {

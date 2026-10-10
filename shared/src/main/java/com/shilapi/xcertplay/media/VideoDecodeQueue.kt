@@ -30,17 +30,37 @@ internal class VideoDecodeQueue(
 ) {
     private val jobs = LinkedBlockingQueue<VideoJob>()
 
-    @Synchronized fun offer(job: VideoJob) {
+    fun offer(job: VideoJob) {
         if (job is VideoJob.Frame) {
-            val frames = jobs.filterIsInstance<VideoJob.Frame>()
-            if (frames.size >= maxFrames || frames.sumOf { it.nalus.size.toLong() } + job.nalus.size > maxBytes) {
-                discardFrames()
-                jobs.offer(VideoJob.Resync)
+            val oversized = job.nalus.size > maxBytes
+            // Every frame of a UI stream is a reference frame; shedding one smears the picture
+            // until the next keyframe. When tuned, the reader waits for space first, which closes
+            // the TCP window so the phone throttles itself (Open Headunit measured two bursts of
+            // ~50 shed frames on an MT6735 with the old immediate drop).
+            val deadline = System.nanoTime() + ForkTuning.FEED_WAIT_MILLIS * 1_000_000
+            while (true) {
+                synchronized(this) {
+                    if (!isFull(job)) {
+                        if (!oversized) jobs.offer(job)
+                        return
+                    }
+                    if (oversized || !ForkTuning.feedWait || System.nanoTime() >= deadline) {
+                        discardFrames()
+                        jobs.offer(VideoJob.Resync)
+                        // A single oversized frame is also a lost reference chain: resync, then drop it.
+                        if (!oversized) jobs.offer(job)
+                        return
+                    }
+                }
+                try { Thread.sleep(ForkTuning.FEED_WAIT_SLICE_MILLIS) } catch (_: InterruptedException) { return }
             }
-            // A single oversized frame is also a lost reference chain.
-            if (job.nalus.size > maxBytes) return
         }
-        jobs.offer(job)
+        synchronized(this) { jobs.offer(job) }
+    }
+
+    private fun isFull(job: VideoJob.Frame): Boolean {
+        val frames = jobs.filterIsInstance<VideoJob.Frame>()
+        return frames.size >= maxFrames || frames.sumOf { it.nalus.size.toLong() } + job.nalus.size > maxBytes
     }
 
     @Synchronized fun discardFrames() {

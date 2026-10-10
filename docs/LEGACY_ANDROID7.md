@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.18)
+## Fork features (0.2.13-legacy24.19)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,18 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Master tuning switch (24.19)**: "Fork performance tuning (master)" in
+  Display and performance, default on. On, every fork option below it is
+  active by default: uncompressed PCM music, legacy STREAM_MUSIC routing,
+  low-latency audio track, soft clipper, low-latency video (MediaTek key
+  ladder + newest-frame catch-up), SurfaceView output, video feed wait,
+  video socket tuning, sustained performance mode and a session wake lock.
+  Off, every loader returns the upstream behaviour regardless of the
+  sub-options. Also: `largeHeap`, byte-level "wired link" trace lines
+  throttled after 400 per session (1 in 50 afterwards). From Open Headunit:
+  socket options (no-delay, keep-alive, IPTOS_LOWDELAY, 256 KiB receive
+  bound), feed wait instead of shedding reference frames (1 s, 25 ms slices),
+  and the MediaTek power-saving wake lock.
 - **Video decoder sizing and ladder from Open Headunit (24.18)**:
   KEY_MAX_INPUT_SIZE is derived from the picture (macroblock-aligned 4:2:0
   samples / 2, floor 128 KiB, cap 1 MiB below API 28) instead of a fixed

@@ -558,6 +558,19 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         WheelKeyService.restoreIfNeeded(this)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Legacy fork tuning: runtime switches for the stream code, plus a stable-clock request.
+        com.shilapi.xcertplay.media.ForkTuning.videoSocketOptions = AirPlayPersistence.loadVideoSocketOptions(this)
+        com.shilapi.xcertplay.media.ForkTuning.feedWait = AirPlayPersistence.loadFeedWait(this)
+        com.shilapi.xcertplay.media.ForkTuning.traceBudget = if (AirPlayPersistence.loadForkTuning(this)) 400 else Int.MAX_VALUE
+        if (AirPlayPersistence.loadSustainedPerformance(this) && Build.VERSION.SDK_INT >= 24) {
+            runCatching { window.setSustainedPerformanceMode(true) }
+        }
+        if (AirPlayPersistence.loadSessionWakeLock(this)) runCatching {
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            sessionWakeLock = pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "DiPlay:session")?.apply {
+                setReferenceCounted(false); acquire(6 * 60 * 60 * 1000L)
+            }
+        }
         getSystemService(android.hardware.display.DisplayManager::class.java)
             ?.registerDisplayListener(clusterDisplayListener, mainHandler)
         initializeSessionLog()
@@ -769,6 +782,8 @@ class CarPlayHostActivity : ComponentActivity() {
             }
         }
     }
+
+    private var sessionWakeLock: android.os.PowerManager.WakeLock? = null
 
     private fun isIphoneUsbAttachment(intent: Intent): Boolean {
         if (intent.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return false
@@ -1288,6 +1303,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        runCatching { sessionWakeLock?.let { if (it.isHeld) it.release() } }; sessionWakeLock = null
         resetSidePanel()
         nightModeController.pause()
         pictureBinding?.close()
