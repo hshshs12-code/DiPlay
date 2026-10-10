@@ -733,6 +733,24 @@ class DiPlayActivity : ComponentActivity() {
             sub("Legacy music stream routing", "Plays music on Android's classic STREAM_MUSIC route instead of usage-based attributes, the path Open Headunit uses.", "legacy_music_route") { AirPlayPersistence.saveLegacyMusicRoute(this, it) }
             sub("Low-latency audio track", "Requests Android's low-latency output mode for music.", "low_latency_audio_track") { AirPlayPersistence.saveLowLatencyAudioTrack(this, it) }
             sub("Soft clipper on music", "Rounds off peaks above 80% instead of hard clipping. Applies on the next track.", "soft_clip_media", reconnect = false) { AirPlayPersistence.saveSoftClipMedia(this, it) }
+            // ---- Audio path: DiPlay as the sound card ----
+            card.addView(label("Audio path (DiPlay as the sound card)", 16, TEXT, true).apply { setPadding(0, dp(14), 0, dp(2)) })
+            card.addView(label("Takes the remaining processing away from Android: no mixer resampling, no early rounding, software volume at unity, vendor sound effects off. Each switch is independent; turn one off if it misbehaves.", 13, MUTED).apply { setPadding(0, 0, 0, dp(4)) })
+            sub("Output at the hardware sample rate", "Opens the music track at the hardware's own rate (${AudioPath.nativeSampleRate(this).takeIf { it > 0 } ?: "unknown"} Hz here) and resamples in DiPlay with a windowed-sinc converter, so Android's mixer does not resample.", "native_rate_output") { AirPlayPersistence.saveNativeRateOutput(this, it) }
+            sub("Float output to Android's mixer", "Hands Android 32-bit float samples; the first rounding to integer happens in the audio driver, not in DiPlay.", "float_output") { AirPlayPersistence.saveFloatOutput(this, it) }
+            sub("Keep Android media volume at maximum", "When the knob drives the amplifier chip, Android's software volume should sit at 100 % so the mixer multiplies by 1. Skipped automatically when the knob is detected to be the software volume.", "pin_media_volume", reconnect = false) { AirPlayPersistence.savePinMediaVolume(this, it) }
+            sub("Disable MediaTek sound enhancements", "Switches off BesLoudness / BesSurround / MusicPlus through the vendor audio interface at session start, when the firmware has them.", "disable_vendor_fx", reconnect = false) { AirPlayPersistence.saveDisableVendorEnhancements(this, it) }
+            val pathReadout = label(AudioPath.describe(this), 13, MUTED).apply { setPadding(0, dp(6), 0, dp(6)) }
+            card.addView(pathReadout)
+            val knobRow = row()
+            fun knobButton(title: String, knob: AudioPath.Knob?, evidence: String) = button(title, false) {
+                AudioPath.setKnob(this, knob, evidence); pathReadout.text = AudioPath.describe(this)
+            }
+            knobRow.addView(knobButton("Knob: auto-detect", null, ""), LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
+            knobRow.addView(knobButton("Knob is hardware", AudioPath.Knob.HARDWARE, "Set by you: the knob does not move Android's volume slider."), LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
+            knobRow.addView(knobButton("Knob is software", AudioPath.Knob.SOFTWARE, "Set by you: the knob moves Android's volume slider."), LinearLayout.LayoutParams(0, dp(44), 1f))
+            card.addView(knobRow)
+            card.addView(label("Tell DiPlay about the knob if auto-detect has not decided: turn the knob while music plays; if the on-screen Android volume bar moves, it is software.", 12, MUTED).apply { setPadding(0, dp(4), 0, dp(8)) })
             sub("Low-latency video", "MediaTek low-latency, no-reorder and motion-interpolation-off decoder keys on a fallback ladder, plus newest-frame catch-up after stalls.", "low_latency_video") { AirPlayPersistence.saveLowLatencyVideo(this, it) }
             sub("SurfaceView output", "Draws video straight to the screen, skipping a compositing step. Picture adjustments unavailable while on.", "surfaceview_output") { AirPlayPersistence.saveSurfaceViewOutput(this, it) }
             sub("Video feed wait", "When the decoder falls behind, wait up to 1 s for it instead of discarding frames (which smears the picture until the next keyframe).", "video_feed_wait") { AirPlayPersistence.saveFeedWait(this, it) }
@@ -3296,6 +3314,9 @@ class DiPlayActivity : ComponentActivity() {
             }
             if (activities.isEmpty() && receivers.isEmpty()) appendLine("none found")
         }.onFailure { appendLine("query failed: ${it.javaClass.simpleName}") }
+        appendLine()
+        appendLine("--- Audio path ---")
+        appendLine(runCatching { AudioPath.describe(appContext) }.getOrDefault("unavailable"))
         appendLine()
         appendLine("--- Recent own-app process exits (Android 11+) ---")
             appendLine(ProcessExitDiagnostics.report(appContext))

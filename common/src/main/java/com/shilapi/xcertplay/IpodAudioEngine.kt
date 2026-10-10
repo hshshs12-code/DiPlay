@@ -40,6 +40,7 @@ import com.shilapi.xcertplay.media.AudioEffectController
 import com.shilapi.xcertplay.media.AudioEffectSettings
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
 import com.shilapi.xcertplay.media.EqualizerDsp
+import com.shilapi.xcertplay.media.MediaOutputStage
 import com.shilapi.xcertplay.media.ThreadPriorities
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.orchestration.MfiTarget
@@ -361,13 +362,8 @@ object IpodAudioEngine {
             sampleRate = rate
             audioPath = "direct"
             inputDevice = "direct USB isochronous (${source.alternate.describe()})"
-            val track = openTrack(rate, channels, bufferMillis = 120)
-            val fx = AudioEffectSettings.load(app)
-            val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx, AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
-                else if (AirPlayPersistence.loadSoftClipMedia(app)) EqualizerDsp(rate, channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
-                else null
-            val effects = if (fx.enabled) AudioEffectController.attach(track.audioSessionId, fx) else null
-            log(app, "direct capture rate=$rate channels=$channels session=${track.audioSessionId} dsp=${dsp != null} effects=${effects?.describe() ?: "none"}")
+            val output = TrackOutput(rate, channels, bufferMillis = 120)
+            log(app, "direct capture rate=$rate channels=$channels ${output.describe()}")
             var timeouts = 0
             var started = false
             var lastStats = System.currentTimeMillis()
@@ -382,25 +378,18 @@ object IpodAudioEngine {
                             continue
                         }
                         timeouts = 0
-                        if (!started) { started = true; track.play(); audioActive = true; notifyListeners(); log(app, "direct usb audio flowing: ${source.stats()}") }
+                        if (!started) { started = true; output.play(); audioActive = true; notifyListeners(); log(app, "direct usb audio flowing: ${source.stats()}") }
                         applyGain(pcm, pcm.size)
-                        dsp?.process(pcm, 0, pcm.size)
                         measure(pcm, pcm.size)
-                        var written = 0
-                        while (written < pcm.size && active.get()) {
-                            val n = track.write(pcm, written, pcm.size - written)
-                            if (n < 0) error("AudioTrack write failed ($n)")
-                            written += n
-                        }
+                        output.write(pcm, pcm.size)
                         framesPlayed += pcm.size / (channels * 2)
-                        underruns = track.underrunCount
+                        underruns = output.underruns()
                         val now = System.currentTimeMillis()
                         if (now - lastStats > 30_000) { lastStats = now; log(app, "direct usb audio ${source.stats()} underruns=$underruns") }
                     }
                 }
             } finally {
-                runCatching { track.pause(); track.flush(); track.release() }
-                dsp?.unregister(); runCatching { effects?.close() }
+                output.close()
                 audioActive = false
             }
             if (active.get() && !started) captureAndroid()
@@ -417,39 +406,27 @@ object IpodAudioEngine {
             val rate = record.sampleRate
             sampleRate = rate
             val channels = if (record.channelCount >= 2) 2 else 1
-            val track = openTrack(rate, channels, bufferMillis = 200)
-            val fx = AudioEffectSettings.load(app)
-            val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx, AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
-                else if (AirPlayPersistence.loadSoftClipMedia(app)) EqualizerDsp(rate, channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
-                else null
-            val effects = if (fx.enabled) AudioEffectController.attach(track.audioSessionId, fx) else null
-            log(app, "capture rate=$rate channels=$channels source=${record.audioSource} session=${track.audioSessionId} dsp=${dsp != null} effects=${effects?.describe() ?: "none"}")
+            val output = TrackOutput(rate, channels, bufferMillis = 200)
+            log(app, "capture rate=$rate channels=$channels source=${record.audioSource} ${output.describe()}")
             val buffer = ByteArray(rate / 100 * channels * 2)
             try {
                 record.startRecording()
                 if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) error("AudioRecord did not start")
-                track.play()
+                output.play()
                 audioActive = true; notifyListeners()
                 while (active.get()) {
                     val read = record.read(buffer, 0, buffer.size)
                     if (read < 0) error("USB audio read failed ($read)")
                     if (read == 0) { Thread.sleep(2); continue }
                     applyGain(buffer, read)
-                    dsp?.process(buffer, 0, read)
                     measure(buffer, read)
-                    var written = 0
-                    while (written < read && active.get()) {
-                        val n = track.write(buffer, written, read - written)
-                        if (n < 0) error("AudioTrack write failed ($n)")
-                        written += n
-                    }
+                    output.write(buffer, read)
                     framesPlayed += read / (channels * 2)
-                    underruns = track.underrunCount
+                    underruns = output.underruns()
                 }
             } finally {
                 runCatching { record.stop() }; runCatching { record.release() }
-                runCatching { track.pause(); track.flush(); track.release() }
-                dsp?.unregister(); runCatching { effects?.close() }
+                output.close()
                 audioActive = false
             }
         }
@@ -484,20 +461,75 @@ object IpodAudioEngine {
             return null
         }
 
-        private fun openTrack(rate: Int, channels: Int, bufferMillis: Int): AudioTrack {
-            val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
-            val minimum = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
-            val bytes = maxOf(minimum * 2, rate * channels * 2 * bufferMillis / 1000)
-            val legacy = AirPlayPersistence.loadMediaAudioChannel(app)
-            val attributes = if (legacy in 1..10) AudioAttributes.Builder().setLegacyStreamType(legacy).build()
-                else AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
-            val builder = AudioTrack.Builder().setAudioAttributes(attributes)
-                .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(mask).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(bytes)
-            if (Build.VERSION.SDK_INT >= 26 && AirPlayPersistence.loadLowLatencyAudioTrack(app)) builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            val track = builder.build()
-            check(track.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack did not initialize" }
-            return track
+        /** AudioTrack plus DiPlay's chain and output stage (hardware rate, float), like the CarPlay media sink. */
+        private inner class TrackOutput(private val rate: Int, private val channels: Int, bufferMillis: Int) {
+            private val outRate = AudioPath.mediaOutputSampleRate(app).takeIf { it > 0 } ?: rate
+            private val floatOut = AudioPath.floatOutput(app)
+            private val track: AudioTrack
+            private val dsp: EqualizerDsp?
+            private val effects: AudioEffectController?
+            private val stage: MediaOutputStage
+
+            init {
+                val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+                val encoding = if (floatOut) AudioFormat.ENCODING_PCM_FLOAT else AudioFormat.ENCODING_PCM_16BIT
+                val sampleBytes = if (floatOut) 4 else 2
+                val minimum = AudioTrack.getMinBufferSize(outRate, mask, encoding)
+                val bytes = maxOf(minimum * 2, outRate * channels * sampleBytes * bufferMillis / 1000)
+                val legacy = AirPlayPersistence.loadMediaAudioChannel(app)
+                val attributes = if (legacy in 1..10) AudioAttributes.Builder().setLegacyStreamType(legacy).build()
+                    else AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
+                val builder = AudioTrack.Builder().setAudioAttributes(attributes)
+                    .setAudioFormat(AudioFormat.Builder().setSampleRate(outRate).setChannelMask(mask).setEncoding(encoding).build())
+                    .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(bytes)
+                if (Build.VERSION.SDK_INT >= 26 && AirPlayPersistence.loadLowLatencyAudioTrack(app)) builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                track = builder.build()
+                check(track.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack did not initialize" }
+                val fx = AudioEffectSettings.load(app)
+                val softClip = AirPlayPersistence.loadSoftClipMedia(app)
+                dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx, softClip); it.register() }
+                    else if (softClip) EqualizerDsp(rate, channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
+                    else null
+                effects = if (fx.enabled) AudioEffectController.attach(track.audioSessionId, fx) else null
+                stage = MediaOutputStage(rate, channels, outRate, floatOut) { dsp }
+            }
+
+            fun describe() = "${stage.describe()} session=${track.audioSessionId} dsp=${dsp != null} effects=${effects?.describe() ?: "none"}"
+            fun play() = track.play()
+            fun underruns(): Int = track.underrunCount
+
+            fun write(pcm: ByteArray, length: Int) {
+                if (stage.active) {
+                    val rendered = stage.render(pcm, 0, length)
+                    val floats = rendered.floats
+                    if (floats != null) {
+                        var written = 0
+                        val total = rendered.lengthBytes / 4
+                        while (written < total && active.get()) {
+                            val n = track.write(floats, written, total - written, AudioTrack.WRITE_BLOCKING)
+                            if (n < 0) error("AudioTrack write failed ($n)")
+                            written += n
+                        }
+                    } else writeBytes(rendered.bytes!!, rendered.lengthBytes)
+                } else {
+                    dsp?.process(pcm, 0, length)
+                    writeBytes(pcm, length)
+                }
+            }
+
+            private fun writeBytes(data: ByteArray, length: Int) {
+                var written = 0
+                while (written < length && active.get()) {
+                    val n = track.write(data, written, length - written)
+                    if (n < 0) error("AudioTrack write failed ($n)")
+                    written += n
+                }
+            }
+
+            fun close() {
+                runCatching { track.pause(); track.flush(); track.release() }
+                dsp?.unregister(); runCatching { effects?.close() }
+            }
         }
     }
 

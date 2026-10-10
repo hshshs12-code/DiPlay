@@ -180,6 +180,10 @@ class AndroidMediaSink(
     private val lowLatencyAudioTrack: Boolean = false,
     /** Legacy fork: soft clipper on all media output, independent of the equalizer. */
     private val softClipMedia: Boolean = false,
+    /** Legacy fork: open the media track at this rate (the hardware's) and resample in DiPlay; 0 = stream rate. */
+    private val mediaOutputSampleRate: Int = 0,
+    /** Legacy fork: hand Android float samples for media so nothing is requantised before the driver. */
+    private val mediaFloatOutput: Boolean = false,
     private val advancedAudioChannelMapping: Boolean = false,
     private val audioFocusEnabled: Boolean = false,
     private val audioFocusAutoYield: Boolean = true,
@@ -455,6 +459,8 @@ class AndroidMediaSink(
             advancedAudioChannelMapping,
             lowLatencyTrack = lowLatencyAudioTrack,
             softClip = softClipMedia,
+            outputSampleRate = mediaOutputSampleRate,
+            floatOutput = mediaFloatOutput,
             audioFocusEnabled,
             mediaChannel,
             navigationChannel,
@@ -908,6 +914,8 @@ private class AudioRenderer(
     private val advancedAudioChannelMapping: Boolean,
     private val lowLatencyTrack: Boolean = false,
     private val softClip: Boolean = false,
+    private val outputSampleRate: Int = 0,
+    private val floatOutput: Boolean = false,
     private val audioFocusEnabled: Boolean,
     private val mediaChannel: Int,
     private val navigationChannel: Int,
@@ -927,6 +935,7 @@ private class AudioRenderer(
     private var track: AudioTrack? = null
     private var effects: AudioEffectController? = null
     private var eqDsp: EqualizerDsp? = null
+    private var outputStage: MediaOutputStage? = null
     private var pcm = ByteArray(64 * 1024)
     private var playbackStarted = false
     private var prebufferBytes = 0
@@ -946,7 +955,8 @@ private class AudioRenderer(
     private val packetsDropped = AtomicInteger()
     private val lastArrivalNs = AtomicLong()
     private val maxArrivalGapMs = AtomicLong()
-    private val frameBytes = if (format.channels >= 2) 4 else 2
+    /** Bytes per frame of the AudioTrack (float output doubles it). */
+    private var frameBytes = if (format.channels >= 2) 4 else 2
     private var totalWrittenFrames = 0L
     private var writtenFramesThisWindow = 0L
     private var writeErrorsThisWindow = 0
@@ -958,7 +968,7 @@ private class AudioRenderer(
     private var statsWindowStartNs = 0L
     private var statsLastUnderruns = 0
     private var bytesPerSecond = 0
-    private val bufferProgress = AudioBufferProgress(if (format.channels >= 2) 4 else 2)
+    private var bufferProgress = AudioBufferProgress(if (format.channels >= 2) 4 else 2)
     private var underrunsAtPlaybackStart = 0
     private var lastPcmWriteNs = 0L
     private var rebufferCount = 0
@@ -1085,10 +1095,17 @@ private class AudioRenderer(
 
     private fun createTrack() {
         diagnosticStage = "track-buffer-size"
-        val encoding = AndroidAudioFormat.ENCODING_PCM_16BIT
+        val selection = mappedSelection()
+        val isMedia = selection.channel == AudioChannel.MEDIA
+        // Legacy fork: media may open at the hardware rate and/or in float; other channels stay as-is.
+        val outRate = if (isMedia && outputSampleRate > 0) outputSampleRate else format.sampleRate
+        val encoding = if (isMedia && floatOutput) AndroidAudioFormat.ENCODING_PCM_FLOAT else AndroidAudioFormat.ENCODING_PCM_16BIT
+        val sampleBytes = if (encoding == AndroidAudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+        frameBytes = (if (format.channels >= 2) 2 else 1) * sampleBytes
+        bufferProgress = AudioBufferProgress(frameBytes)
         val channelMask = if (format.channels >= 2) AndroidAudioFormat.CHANNEL_OUT_STEREO
         else AndroidAudioFormat.CHANNEL_OUT_MONO
-        val minBuffer = AudioTrack.getMinBufferSize(format.sampleRate, channelMask, encoding)
+        val minBuffer = AudioTrack.getMinBufferSize(outRate, channelMask, encoding)
         if (minBuffer <= 0) {
             Log.e(TAG, "AudioTrack buffer size unavailable rate=${format.sampleRate} channels=${format.channels}")
             runCatching { report("Audio: track unavailable api=${Build.VERSION.SDK_INT} stage=$diagnosticStage " +
@@ -1096,14 +1113,14 @@ private class AudioRenderer(
                 "channels=${format.channels} minBufferResult=$minBuffer") }
             return
         }
-        val selection = mappedSelection()
         mappedChannel = selection.channel
         val streamOverride = channelOverride(selection.channel)
         var attributes = audioAttributesFor(selection, streamOverride)
         trackAttributes = attributes
-        val plan = MediaAudioBuffer.plan(selection.channel == AudioChannel.MEDIA,
-            format.sampleRate, format.channels, minBuffer, mediaBufferMillis)
-        bytesPerSecond = format.sampleRate * frameBytes
+        val plan = MediaAudioBuffer.plan(isMedia, outRate, format.channels, minBuffer, mediaBufferMillis).let {
+            if (sampleBytes == 4) MediaAudioBuffer.Plan(it.trackBufferBytes * 2, it.startBytes * 2) else it
+        }
+        bytesPerSecond = outRate * frameBytes
         val built: AudioTrack
         var routeLabel: String
         diagnosticStage = "track-build"
@@ -1112,7 +1129,7 @@ private class AudioRenderer(
             routeLabel = "usage"
             built = AudioTrack.Builder()
                 .setAudioAttributes(attributes)
-                .setAudioFormat(pcmFormat(encoding, channelMask))
+                .setAudioFormat(pcmFormat(encoding, channelMask, outRate))
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .setBufferSizeInBytes(plan.trackBufferBytes)
                 .apply { if (lowLatencyTrack && Build.VERSION.SDK_INT >= 26 && selection.channel == AudioChannel.MEDIA) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
@@ -1122,7 +1139,7 @@ private class AudioRenderer(
             routeLabel = "streamType=$streamType"
             built = LegacyAudioFallback.build(
                 createLegacy = {
-                    AudioTrack(streamType, format.sampleRate, channelMask, encoding,
+                    AudioTrack(streamType, outRate, channelMask, encoding,
                         plan.trackBufferBytes, AudioTrack.MODE_STREAM)
                 },
                 isInitialized = { it.state == AudioTrack.STATE_INITIALIZED },
@@ -1134,7 +1151,7 @@ private class AudioRenderer(
                     attributes = audioAttributesFor(selection)
                     AudioTrack.Builder()
                         .setAudioAttributes(attributes)
-                        .setAudioFormat(pcmFormat(encoding, channelMask))
+                        .setAudioFormat(pcmFormat(encoding, channelMask, outRate))
                         .setTransferMode(AudioTrack.MODE_STREAM)
                         .setBufferSizeInBytes(plan.trackBufferBytes)
                         .apply { if (lowLatencyTrack && Build.VERSION.SDK_INT >= 26 && selection.channel == AudioChannel.MEDIA) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
@@ -1159,6 +1176,10 @@ private class AudioRenderer(
             } else if (softClip) {
                 eqDsp = EqualizerDsp(format.sampleRate, format.channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
                 runCatching { report("Audio: soft clipper active") }
+            }
+            if (outRate != format.sampleRate || encoding == AndroidAudioFormat.ENCODING_PCM_FLOAT) {
+                outputStage = MediaOutputStage(format.sampleRate, format.channels, outRate, encoding == AndroidAudioFormat.ENCODING_PCM_FLOAT) { eqDsp }
+                runCatching { report("Audio: DiPlay output stage ${outputStage?.describe()} (Android mixer left with nothing to resample)") }
             }
         }
         diagnosticStage = "track-attributes"
@@ -1259,8 +1280,8 @@ private class AudioRenderer(
         track?.let(audioFocusCoordinator::release)
     }
 
-    private fun pcmFormat(encoding: Int, channelMask: Int) = AndroidAudioFormat.Builder()
-        .setSampleRate(format.sampleRate)
+    private fun pcmFormat(encoding: Int, channelMask: Int, sampleRate: Int = format.sampleRate) = AndroidAudioFormat.Builder()
+        .setSampleRate(sampleRate)
         .setChannelMask(channelMask)
         .setEncoding(encoding)
         .build()
@@ -1473,17 +1494,28 @@ private class AudioRenderer(
         // Legacy fork: headroom before any boost (device effects run after the track, unclamped),
         // then the optional 12-band stage. Media only; calls and navigation keep their level.
         // Headroom attenuation (24.14) removed at the user's request; boosts are applied as set.
-        if (mappedChannel == AudioChannel.MEDIA) eqDsp?.process(data, offset, length)
+        val stage = if (mappedChannel == AudioChannel.MEDIA) outputStage else null
+        val rendered = if (stage != null) stage.render(data, offset, length) else null
+        if (stage == null && mappedChannel == AudioChannel.MEDIA) eqDsp?.process(data, offset, length)
+        val outBytes: ByteArray? = if (rendered == null) data else rendered.bytes
+        val outFloats: FloatArray? = rendered?.floats
+        val outOffset = if (rendered == null) offset else 0
+        val outLength = rendered?.lengthBytes ?: length
         var written = 0
-        while (written < length && running) {
+        while (written < outLength && running) {
             val writeLength = if (playbackStarted) {
-                length - written
+                outLength - written
             } else {
-                minOf(length - written, PREBUFFER_WRITE_CHUNK_BYTES)
+                minOf(outLength - written, PREBUFFER_WRITE_CHUNK_BYTES)
             }
             val writeStarted = System.nanoTime()
             diagnosticStage = "track-write"
-            val count = track.write(data, offset + written, writeLength, AudioTrack.WRITE_BLOCKING)
+            val count = if (outFloats != null) {
+                val floats = track.write(outFloats, (outOffset + written) / 4, writeLength / 4, AudioTrack.WRITE_BLOCKING)
+                if (floats > 0) floats * 4 else floats
+            } else {
+                track.write(outBytes!!, outOffset + written, writeLength, AudioTrack.WRITE_BLOCKING)
+            }
             maxWriteMs = maxOf(maxWriteMs, (System.nanoTime() - writeStarted) / 1_000_000L)
             if (count < 0) {
                 writeErrorsThisWindow++

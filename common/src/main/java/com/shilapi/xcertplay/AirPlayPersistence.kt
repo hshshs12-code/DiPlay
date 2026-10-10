@@ -211,6 +211,15 @@ object AirPlayPersistence {
     fun saveLowLatencyAudioTrack(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("low_latency_audio_track", enabled).apply()
     }
+    // Legacy fork: audio path (DiPlay as the sound card).
+    fun loadNativeRateOutput(context: Context): Boolean = tuned(context, "native_rate_output")
+    fun saveNativeRateOutput(context: Context, enabled: Boolean) = saveTuned(context, "native_rate_output", enabled)
+    fun loadFloatOutput(context: Context): Boolean = tuned(context, "float_output")
+    fun saveFloatOutput(context: Context, enabled: Boolean) = saveTuned(context, "float_output", enabled)
+    fun loadPinMediaVolume(context: Context): Boolean = tuned(context, "pin_media_volume")
+    fun savePinMediaVolume(context: Context, enabled: Boolean) = saveTuned(context, "pin_media_volume", enabled)
+    fun loadDisableVendorEnhancements(context: Context): Boolean = tuned(context, "disable_vendor_fx")
+    fun saveDisableVendorEnhancements(context: Context, enabled: Boolean) = saveTuned(context, "disable_vendor_fx", enabled)
     fun loadSoftClipMedia(context: Context): Boolean = tuned(context, "soft_clip_media")
     fun saveSoftClipMedia(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("soft_clip_media", enabled).apply()

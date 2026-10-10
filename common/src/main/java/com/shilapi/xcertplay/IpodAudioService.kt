@@ -18,6 +18,7 @@ import com.shilapi.xcertplay.host.R
 /** Keeps iPod audio playing while the user is in other head-unit apps, with transport controls. */
 class IpodAudioService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var audioPathStarted = false
     private val handler = Handler(Looper.getMainLooper())
     private var lastNotificationKey = ""
     private val listener: () -> Unit = { handler.post { if (IpodAudioEngine.isRunning()) notify(false) } }
@@ -42,6 +43,7 @@ class IpodAudioService : Service() {
                 .createNotificationChannel(NotificationChannel(CHANNEL, "iPod audio", NotificationManager.IMPORTANCE_LOW))
         }
         IpodMediaSession.start(this)
+        if (!audioPathStarted) { audioPathStarted = true; runCatching { AudioPath.onSessionStart(this) { IpodAudioEngine.log(this, it) } } }
         notify(true)
         if (wakeLock == null) runCatching {
             wakeLock = getSystemService(PowerManager::class.java)?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DiPlay:ipod")
@@ -82,6 +84,7 @@ class IpodAudioService : Service() {
     }
 
     override fun onDestroy() {
+        if (audioPathStarted) { audioPathStarted = false; runCatching { AudioPath.onSessionEnd(this) } }
         IpodAudioEngine.listeners.remove(listener)
         IpodAudioEngine.stop()
         IpodMediaSession.stop()

@@ -84,6 +84,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     // Coefficient smoothing and dither
     private var smoothChunks = 0
     private var ditherState = 0x9E3779B9.toInt()
+    private var floatOut: FloatArray? = null
+    private var floatIndex = 0
     private val frame = DoubleArray(channels)
     @Volatile private var configured = false
 
@@ -204,11 +206,34 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
 
     /** Processes 16-bit little-endian interleaved PCM in place. */
     fun process(data: ByteArray, offset: Int, length: Int) {
+        floatOut = null
+        run(data, offset, length)
+    }
+
+    /**
+     * Processes 16-bit PCM and writes the result as float samples into [out] (no requantisation);
+     * returns the number of samples written. A neutral chain copies the input exactly.
+     */
+    fun processToFloat(data: ByteArray, offset: Int, length: Int, out: FloatArray): Int {
+        val frames = length / (2 * channels)
+        val samples = frames * channels
+        floatOut = out
+        floatIndex = 0
+        try {
+            if (!run(data, offset, length)) MediaOutputStage.convert(data, offset, samples, out)
+        } finally {
+            floatOut = null
+        }
+        return samples
+    }
+
+    /** Returns false when nothing is active and the data was left untouched. */
+    private fun run(data: ByteArray, offset: Int, length: Int): Boolean {
         val useLimiter = limiter
         val g = graphic.any; val p = parametric.any; val sub = subsonicOn; val b = bassOn; val auto = autoOn
-        if (!g && !p && !sub && !b && !auto && !useLimiter) return
+        if (!g && !p && !sub && !b && !auto && !useLimiter) return false
         val frames = length / (2 * channels)
-        if (frames <= 0) return
+        if (frames <= 0) return false
         ensureScratch(frames)
         val gActive = graphic.active; val pActive = parametric.active
         var index = offset
@@ -282,6 +307,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
             produced += chunk
         }
         if (useLimiter) writeLimited(data, offset, frames) else writeDirect(data, offset, frames)
+        return true
     }
 
     /** No limiter: quantise the processed block with dither. */
@@ -346,8 +372,10 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         System.arraycopy(tmpPeak, 0, delayPeak, 0, lookahead)
     }
 
-    /** 16-bit output with TPDF dither (two uniform draws, ±1 LSB triangular). */
+    /** 16-bit output with TPDF dither (two uniform draws, ±1 LSB triangular), or float when rendering to float. */
     private fun put(data: ByteArray, o: Int, x: Double) {
+        val f = floatOut
+        if (f != null) { f[floatIndex++] = x.toFloat(); return }
         var r = ditherState
         r = r xor (r shl 13); r = r xor (r ushr 17); r = r xor (r shl 5)
         val d1 = (r and 0xffff) / 65536.0

@@ -791,6 +791,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private var sessionWakeLock: android.os.PowerManager.WakeLock? = null
+    private var audioPathStarted = false
 
     private fun isIphoneUsbAttachment(intent: Intent): Boolean {
         if (intent.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return false
@@ -1310,6 +1311,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (audioPathStarted) { audioPathStarted = false; runCatching { AudioPath.onSessionEnd(this) } }
         runCatching { sessionWakeLock?.let { if (it.isHeld) it.release() } }; sessionWakeLock = null
         resetSidePanel()
         nightModeController.pause()
@@ -3813,6 +3815,10 @@ class CarPlayHostActivity : ComponentActivity() {
     ): AndroidMediaSink {
         // Capture this session's log: late decoder shutdown must not write into a new session.
         val diagnosticLog = sessionLog
+        if (!audioPathStarted) {
+            audioPathStarted = true
+            runCatching { AudioPath.onSessionStart(this) { AsyncDiagnosticLog.append(diagnosticLog, it) } }
+        }
         return AndroidMediaSink(
             surface = null,
             videoWidth = videoWidth,
@@ -3822,6 +3828,8 @@ class CarPlayHostActivity : ComponentActivity() {
             videoFrameRate = AirPlayPersistence.loadFps(this),
             lowLatencyAudioTrack = AirPlayPersistence.loadLowLatencyAudioTrack(this),
             softClipMedia = AirPlayPersistence.loadSoftClipMedia(this),
+            mediaOutputSampleRate = AudioPath.mediaOutputSampleRate(this),
+            mediaFloatOutput = AudioPath.floatOutput(this),
             advancedAudioChannelMapping = advancedAudioChannelMapping,
             audioFocusEnabled = AirPlayPersistence.loadAudioFocusEnabled(this),
             audioFocusAutoYield = AirPlayPersistence.loadAudioFocusAutoYield(this),

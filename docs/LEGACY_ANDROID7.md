@@ -39,7 +39,24 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.24)
+## Fork features (0.2.13-legacy24.25)
+
+24.25: audio path — DiPlay as the sound card
+- `MediaOutputStage` + `SincResampler` (32-tap Kaiser windowed sinc, 256
+  phases): the media AudioTrack opens at the hardware's native rate and/or in
+  float, DiPlay resamples 44.1→48 kHz itself and the DSP renders straight to
+  float (`EqualizerDsp.processToFloat`), so Android's mixer neither resamples
+  nor requantises. Applies to CarPlay media and both iPod capture paths.
+- `AudioPath` (common): native rate/buffer query, MediaTek BesLoudness /
+  BesSurround / MusicPlus switched off through `AudioManager.setParameters`
+  with readback, media volume pinned to maximum when the knob is hardware, and
+  knob detection (VOLUME_CHANGED_ACTION watcher: an external change means the
+  knob is Android's software volume; isVolumeFixed or 10 min of unchanged
+  volume across sessions means hardware). Manual override buttons.
+- Four independent toggles under the fork tuning master switch
+  (native_rate_output, float_output, pin_media_volume, disable_vendor_fx),
+  a live readout on the settings page, and an "Audio path" section in the
+  diagnostic report.
 
 24.24: DSP core brought to car-audio grade
 - Double-precision processing end to end, quantised once at the output with
