@@ -12,6 +12,8 @@ object EqPresets {
         //                         31  62 125 250 500  1k  2k  3k  4k  8k 12k 16k
         Preset("Sound Good",      intArrayOf(4, 3, 2, 1, -2, -3, -1, 0, 1, 2, 3, 3)),
         Preset("Highs Only",      intArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 4)),
+        // The user's Android phone EQ used with Android Auto: 60 Hz +7, 230 Hz +1.5, 910 Hz 0, 4 kHz +1, 14 kHz +3.
+        Preset("Phone (Android Auto)", intArrayOf(7, 7, 5, 2, 1, 0, 0, 1, 1, 2, 3, 3)),
         Preset("Bass Boost",      intArrayOf(7, 6, 5, 3, 1, 0, 0, 0, 0, 0, 0, 0)),
         Preset("Bass Reducer",    intArrayOf(-7, -6, -5, -3, -1, 0, 0, 0, 0, 0, 0, 0)),
         Preset("Treble Boost",    intArrayOf(0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 6)),

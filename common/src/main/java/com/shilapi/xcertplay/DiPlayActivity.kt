@@ -713,6 +713,20 @@ class DiPlayActivity : ComponentActivity() {
                 AirPlayPersistence.savePreferPcmAudio(this, it)
                 reconnectForClusterMap()
             }
+            toggle(card, "Legacy music stream routing", "Plays music on Android's classic STREAM_MUSIC route instead of usage-based attributes, the path Open Headunit uses. Reconnects CarPlay.",
+                AirPlayPersistence.loadMediaAudioChannel(this) == 3) {
+                AirPlayPersistence.saveMediaAudioChannel(this, if (it) 3 else 0)
+                reconnectForClusterMap()
+            }
+            toggle(card, "Low-latency audio track", "Requests Android's low-latency output mode for music (as Open Headunit). Reconnects CarPlay.",
+                AirPlayPersistence.loadLowLatencyAudioTrack(this)) {
+                AirPlayPersistence.saveLowLatencyAudioTrack(this, it)
+                reconnectForClusterMap()
+            }
+            toggle(card, "Soft clipper on music", "Rounds off peaks above 80% instead of hard clipping, like Open Headunit's mixer. Applies on the next track.",
+                AirPlayPersistence.loadSoftClipMedia(this)) {
+                AirPlayPersistence.saveSoftClipMedia(this, it)
+            }
             toggle(card, getString(R.string.main_buffered_audio), getString(R.string.main_buffered_audio_description),
                 AirPlayPersistence.loadMainBufferedAudio(this)) {
                 AirPlayPersistence.saveMainBufferedAudio(this, it)

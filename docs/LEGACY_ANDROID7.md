@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.16)
+## Fork features (0.2.13-legacy24.17)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,12 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Audio path options from Open Headunit (24.17)**: "Legacy music stream
+  routing" (media channel 3 = STREAM_MUSIC instead of usage attributes),
+  "Low-latency audio track" (AudioTrack.PERFORMANCE_MODE_LOW_LATENCY on API
+  26+ for media) and "Soft clipper on music" (the 12-band stage's limiter run
+  with flat bands). All off by default. Preset "Phone (Android Auto)" copies
+  the user's phone equalizer curve.
 - **Uncompressed music (24.16)**: "Uncompressed music (PCM)" offers only
   PCM for the main music stream (type 102) so the iPhone sends raw 48 kHz
   PCM and the head unit decodes nothing (Open Headunit does this by default

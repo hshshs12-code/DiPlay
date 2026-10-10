@@ -174,6 +174,10 @@ class AndroidMediaSink(
     private val preferSoftwareHevcDecoder: Boolean = false,
     /** Legacy fork: vendor low-latency decoder hint and stale-frame dropping at the output. */
     private val lowLatencyVideo: Boolean = false,
+    /** Legacy fork: AudioTrack.PERFORMANCE_MODE_LOW_LATENCY for media (as Open Headunit). */
+    private val lowLatencyAudioTrack: Boolean = false,
+    /** Legacy fork: soft clipper on all media output, independent of the equalizer. */
+    private val softClipMedia: Boolean = false,
     private val advancedAudioChannelMapping: Boolean = false,
     private val audioFocusEnabled: Boolean = false,
     private val audioFocusAutoYield: Boolean = true,
@@ -446,6 +450,8 @@ class AndroidMediaSink(
         return AudioRenderer(
             format,
             advancedAudioChannelMapping,
+            lowLatencyTrack = lowLatencyAudioTrack,
+            softClip = softClipMedia,
             audioFocusEnabled,
             mediaChannel,
             navigationChannel,
@@ -870,6 +876,8 @@ private fun MediaFormat.intOrNull(key: String): Int? =
 private class AudioRenderer(
     val format: AudioFormat,
     private val advancedAudioChannelMapping: Boolean,
+    private val lowLatencyTrack: Boolean = false,
+    private val softClip: Boolean = false,
     private val audioFocusEnabled: Boolean,
     private val mediaChannel: Int,
     private val navigationChannel: Int,
@@ -1077,6 +1085,7 @@ private class AudioRenderer(
                 .setAudioFormat(pcmFormat(encoding, channelMask))
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .setBufferSizeInBytes(plan.trackBufferBytes)
+                .apply { if (lowLatencyTrack && Build.VERSION.SDK_INT >= 26 && selection.channel == AudioChannel.MEDIA) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
                 .build()
         } else {
             val streamType = streamOverride
@@ -1098,6 +1107,7 @@ private class AudioRenderer(
                         .setAudioFormat(pcmFormat(encoding, channelMask))
                         .setTransferMode(AudioTrack.MODE_STREAM)
                         .setBufferSizeInBytes(plan.trackBufferBytes)
+                        .apply { if (lowLatencyTrack && Build.VERSION.SDK_INT >= 26 && selection.channel == AudioChannel.MEDIA) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
                         .build()
                 },
             )
@@ -1112,10 +1122,13 @@ private class AudioRenderer(
             val fx = AudioEffectSettings.current(null)
             if (fx.enabled && fx.dspMode) {
                 eqDsp = EqualizerDsp(format.sampleRate, format.channels).also {
-                    it.configure(fx.dspGainsDb(), fx.limiter)
+                    it.configure(fx.dspGainsDb(), fx.limiter || softClip)
                     it.register()
                 }
-                runCatching { report("Audio: 12-band equalizer active rate=${format.sampleRate} channels=${format.channels} limiter=${fx.limiter}") }
+                runCatching { report("Audio: 12-band equalizer active rate=${format.sampleRate} channels=${format.channels} limiter=${fx.limiter || softClip}") }
+            } else if (softClip) {
+                eqDsp = EqualizerDsp(format.sampleRate, format.channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
+                runCatching { report("Audio: soft clipper active") }
             }
         }
         diagnosticStage = "track-attributes"

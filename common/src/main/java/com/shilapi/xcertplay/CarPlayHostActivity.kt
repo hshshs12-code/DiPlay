@@ -3796,6 +3796,8 @@ class CarPlayHostActivity : ComponentActivity() {
             videoHeight = videoHeight,
             preferSoftwareHevcDecoder = hevcSoftwareDecoderEnabled,
             lowLatencyVideo = AirPlayPersistence.loadLowLatencyVideo(this),
+            lowLatencyAudioTrack = AirPlayPersistence.loadLowLatencyAudioTrack(this),
+            softClipMedia = AirPlayPersistence.loadSoftClipMedia(this),
             advancedAudioChannelMapping = advancedAudioChannelMapping,
             audioFocusEnabled = AirPlayPersistence.loadAudioFocusEnabled(this),
             audioFocusAutoYield = AirPlayPersistence.loadAudioFocusAutoYield(this),

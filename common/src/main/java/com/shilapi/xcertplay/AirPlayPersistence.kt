@@ -181,6 +181,18 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("usb_auto_launch", enabled).apply()
     }
 
+    // Legacy fork: audio output path options (as Open Headunit).
+    fun loadLowLatencyAudioTrack(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("low_latency_audio_track", false)
+    fun saveLowLatencyAudioTrack(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("low_latency_audio_track", enabled).apply()
+    }
+    fun loadSoftClipMedia(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("soft_clip_media", false)
+    fun saveSoftClipMedia(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("soft_clip_media", enabled).apply()
+    }
+
     // Legacy fork: uncompressed main audio.
     fun loadPreferPcmAudio(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("prefer_pcm_audio", false)
