@@ -181,6 +181,13 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("usb_auto_launch", enabled).apply()
     }
 
+    // Legacy fork: uncompressed main audio.
+    fun loadPreferPcmAudio(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("prefer_pcm_audio", false)
+    fun savePreferPcmAudio(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("prefer_pcm_audio", enabled).apply()
+    }
+
     // Legacy fork: video latency options.
     fun loadLowLatencyVideo(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("low_latency_video", true)

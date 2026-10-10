@@ -76,6 +76,8 @@ data class AirPlayConfig(
      * ahead of time over TCP, so short Wi-Fi gaps do not interrupt it.
      */
     val mainBufferedAudio: Boolean = false,
+    /** Legacy fork: offer only PCM for the main music stream so the head unit decodes nothing. */
+    val preferPcmMainAudio: Boolean = false,
 )
 
 /** The offer, SETUP and controls must all honor the user's audio-output setting. */

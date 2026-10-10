@@ -39,7 +39,7 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.15)
+## Fork features (0.2.13-legacy24.16)
 
 - **In-app updater** (Settings → Updates): reads the latest release of
   `hshshs12-code/DiPlay` from the GitHub API, downloads its first `.apk` asset
@@ -51,6 +51,11 @@ Runtime guards for APIs newer than 24:
   Android's `Equalizer`, `BassBoost` and `LoudnessEnhancer` attached to the
   CarPlay media track. Band layout comes from the device. Changes apply live to
   a playing track; enabling the feature applies on the next track or reconnect.
+- **Uncompressed music (24.16)**: "Uncompressed music (PCM)" offers only
+  PCM for the main music stream (type 102) so the iPhone sends raw 48 kHz
+  PCM and the head unit decodes nothing (Open Headunit does this by default
+  for Android Auto, which is the likely reason it sounds cleaner on the
+  same unit). Off by default; the iPhone picks AAC whenever AAC is offered.
 - **Boost headroom (24.14, removed in 24.15 at the user's request; the gain helper remains unused)**: Android's Equalizer and BassBoost run after
   the track with no headroom, so a boosted band on a loud master hard-clips
   (heard as fuzz). The media PCM is now attenuated by the largest boost (device

@@ -708,6 +708,11 @@ class DiPlayActivity : ComponentActivity() {
                 bufferPresets.indexOf(AirPlayPersistence.loadMediaBufferMillis(this)).coerceAtLeast(0)) {
                 AirPlayPersistence.saveMediaBufferMillis(this, bufferPresets[it])
             }
+            toggle(card, "Uncompressed music (PCM, experimental)", "Asks the iPhone to send music as raw PCM instead of AAC, so the head unit decodes nothing. About 1.5 Mbit/s; fine on USB, usually fine on Wi-Fi Direct. If the iPhone refuses, music stays silent: turn this off again. Reconnects CarPlay.",
+                AirPlayPersistence.loadPreferPcmAudio(this)) {
+                AirPlayPersistence.savePreferPcmAudio(this, it)
+                reconnectForClusterMap()
+            }
             toggle(card, getString(R.string.main_buffered_audio), getString(R.string.main_buffered_audio_description),
                 AirPlayPersistence.loadMainBufferedAudio(this)) {
                 AirPlayPersistence.saveMainBufferedAudio(this, it)

@@ -3622,6 +3622,7 @@ class CarPlayHostActivity : ComponentActivity() {
             icons = listOf(loadAirPlayIcon()),
             videoInCar = com.shilapi.xcertplay.hud.BydOutputSettings.videoWhileParkedActive(this) || ManualParkedVideo.enabled(this),
             mainBufferedAudio = AirPlayPersistence.loadMainBufferedAudio(this),
+            preferPcmMainAudio = AirPlayPersistence.loadPreferPcmAudio(this),
         )
     }
 
