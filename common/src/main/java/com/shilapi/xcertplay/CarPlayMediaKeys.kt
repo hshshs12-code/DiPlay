@@ -320,6 +320,9 @@ internal object CarPlayMediaKeys {
         else -> current
     }
 
+    /** Legacy fork: shared with the iPod-mode engine. */
+    internal fun decodeArtworkBytes(bytes: ByteArray): Bitmap? = decodeArtwork(bytes)
+
     private fun decodeArtwork(bytes: ByteArray): Bitmap? {
         if (bytes.isEmpty()) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

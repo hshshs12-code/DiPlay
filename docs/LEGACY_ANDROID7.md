@@ -39,7 +39,28 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.20)
+## Fork features (0.2.13-legacy24.21)
+
+24.21: iPod mode made native (iAP2 over USB HID)
+- DiPlay now identifies and authenticates to the iPhone as a real USB audio
+  accessory. The iAP2 link runs over the HID interface of the phone's audio
+  configuration (`Iap2HidStream` fragments link packets into HID reports per
+  the report descriptor; `Iap2IpodClient` drives the session). Identification
+  declares a USBDeviceTransportComponent (44.1/48 kHz) and an iAP2 HID
+  "media remote" component; MFi authentication reuses the fork's offline
+  identity (same one CarPlay uses).
+- After authentication the accessory sends PowerSourceUpdate (charging
+  current is a setting: 500–2400 mA), StartPowerUpdates, StartNowPlayingUpdates,
+  StartHID and StartUSBDeviceModeAudio; the phone's
+  USBDeviceModeAudioInformation sets the capture sample rate.
+- Now Playing screen: artwork (file-transfer session), title/artist/album,
+  source app, seekable progress bar (SetNowPlayingInformation), previous /
+  play-pause / next, shuffle and repeat, Siri, launch Music / Podcasts /
+  Spotify / YouTube Music on the phone (RequestAppLaunch), battery and
+  charging state from PowerUpdate.
+- Android media session + media audio focus: steering-wheel keys, the unit's
+  media widgets and Bluetooth remotes control the iPhone; the car's other
+  sources pause. Media-style notification with previous/play/next/stop.
 
 24.20: iPod audio over USB (audio without CarPlay)
 - New "iPod audio (USB)" button on both home screens and a dedicated screen
