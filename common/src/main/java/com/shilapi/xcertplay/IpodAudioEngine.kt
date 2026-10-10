@@ -363,7 +363,7 @@ object IpodAudioEngine {
             inputDevice = "direct USB isochronous (${source.alternate.describe()})"
             val track = openTrack(rate, channels, bufferMillis = 120)
             val fx = AudioEffectSettings.load(app)
-            val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx.dspGainsDb(), fx.limiter || AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
+            val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx, AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
                 else if (AirPlayPersistence.loadSoftClipMedia(app)) EqualizerDsp(rate, channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
                 else null
             val effects = if (fx.enabled) AudioEffectController.attach(track.audioSessionId, fx) else null
@@ -419,7 +419,7 @@ object IpodAudioEngine {
             val channels = if (record.channelCount >= 2) 2 else 1
             val track = openTrack(rate, channels, bufferMillis = 200)
             val fx = AudioEffectSettings.load(app)
-            val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx.dspGainsDb(), fx.limiter || AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
+            val dsp = if (fx.enabled && fx.dspMode) EqualizerDsp(rate, channels).also { it.configure(fx, AirPlayPersistence.loadSoftClipMedia(app)); it.register() }
                 else if (AirPlayPersistence.loadSoftClipMedia(app)) EqualizerDsp(rate, channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
                 else null
             val effects = if (fx.enabled) AudioEffectController.attach(track.audioSessionId, fx) else null

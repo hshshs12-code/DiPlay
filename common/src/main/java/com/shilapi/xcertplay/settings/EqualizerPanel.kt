@@ -9,6 +9,8 @@ import android.widget.TextView
 import com.shilapi.xcertplay.media.AudioEffectSettings
 import com.shilapi.xcertplay.media.EqPresets
 import com.shilapi.xcertplay.media.EqualizerDsp
+import com.shilapi.xcertplay.media.ParametricBand
+import com.shilapi.xcertplay.media.SoundPresets
 
 /**
  * The equalizer UI shared by the main settings page and the in-CarPlay overlay. The host supplies
@@ -89,6 +91,16 @@ class EqualizerPanel(
                     refreshBands()
                 }.show()
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(4) })
+        if (settings.dspMode) {
+            body.addView(buttonFactory("Car sound presets (2018 Yaris)") {
+                val labels = SoundPresets.YARIS.map { "${it.name}\n${it.description}" }
+                AlertDialog.Builder(context).setTitle("Sound preset for the car")
+                    .setItems(labels.toTypedArray()) { _, index ->
+                        save(SoundPresets.YARIS[index].apply(settings))
+                        buildBody(body)
+                    }.show()
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(6) })
+        }
         bands.onLevelChanged = { band, db ->
             if (settings.dspMode) {
                 val gains = MutableList(EqualizerDsp.BANDS) { settings.dspGainsDb.getOrElse(it) { 0 } }
@@ -112,6 +124,7 @@ class EqualizerPanel(
                 save(settings.copy(limiter = enabled))
             })
         }
+        if (settings.dspMode) buildAdvanced(body)
         body.addView(sliderFactory("Bass boost (device)", (0..100 step 5).toList(), (settings.bassStrength / 10 / 5) * 5, { "$it %" }) {
             save(settings.copy(bassStrength = it * 10))
         })
@@ -123,6 +136,68 @@ class EqualizerPanel(
                 bassStrength = 0, loudnessGainMb = 0, presetName = "Flat"))
             buildBody(body)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(12) })
+    }
+
+    /** Subsonic filter, bass enhancer, auto level and the parametric bands (12-band mode only). */
+    private fun buildAdvanced(body: LinearLayout) {
+        body.addView(TextView(context).apply {
+            text = "Sound processing"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
+        })
+        body.addView(TextView(context).apply {
+            text = "Runs in DiPlay before the car's amplifier. Each stage is free when off. Presets above set all of this at once."
+            textSize = 13f; setTextColor(mutedColor); setPadding(0, 0, 0, dp(6))
+        })
+        val subsonicSteps = listOf(0, 20, 25, 30, 35, 40, 50, 60, 80, 100, 120)
+        body.addView(sliderFactory("Subsonic filter", subsonicSteps, subsonicSteps.minByOrNull { kotlin.math.abs(it - settings.subsonicHz) } ?: 0,
+            { if (it == 0) "Off" else "$it Hz (24 dB/oct)" }) { save(settings.copy(subsonicHz = it, presetName = "")) })
+        body.addView(sliderFactory("Bass enhancer", (0..100 step 10).toList(), settings.bassEnhance / 10 * 10,
+            { if (it == 0) "Off" else "$it % · harmonics the door speakers can play" }) { save(settings.copy(bassEnhance = it, presetName = "")) })
+        val crossovers = listOf(60, 70, 80, 90, 100, 110, 120, 140, 160, 200)
+        body.addView(sliderFactory("Bass enhancer range", crossovers, crossovers.minByOrNull { kotlin.math.abs(it - settings.bassEnhanceHz) } ?: 100,
+            { "below $it Hz" }) { save(settings.copy(bassEnhanceHz = it, presetName = "")) })
+        body.addView(switchFactory("Auto level", settings.autoLevel,
+            "Slow leveler: quiet podcasts and loud tracks end up at a similar volume. Turns the soft limiter on while active.") {
+            save(settings.copy(autoLevel = it, presetName = ""))
+        })
+        body.addView(sliderFactory("Auto level strength", (0..100 step 10).toList(), settings.autoLevelAmount / 10 * 10,
+            { if (it == 0) "Off" else "$it %" }) { save(settings.copy(autoLevelAmount = it, presetName = "")) })
+
+        body.addView(TextView(context).apply {
+            text = "Parametric EQ"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
+        })
+        body.addView(TextView(context).apply {
+            text = "Up to five bands with their own frequency, gain and width. Peak = bell around the frequency; shelves lift or cut everything below/above it."
+            textSize = 13f; setTextColor(mutedColor); setPadding(0, 0, 0, dp(4))
+        })
+        val frequencies = listOf(30, 40, 50, 60, 70, 80, 90, 100, 120, 140, 160, 180, 200, 250, 300, 350, 400, 500, 600, 700, 800, 1000, 1200, 1500, 1800, 2000, 2500, 3000, 3500, 4000, 5000, 6000, 7000, 8000, 10000, 12000, 14000, 16000)
+        val qTenths = listOf(3, 5, 7, 10, 14, 20, 30, 40, 60)
+        val gains = (-12..12).toList()
+        val current = List(EqualizerDsp.MAX_PARAMETRIC) { settings.parametric.getOrElse(it) { ParametricBand() } }
+        val shown = minOf(EqualizerDsp.MAX_PARAMETRIC, current.indexOfLast { it.type != ParametricBand.OFF } + 2)
+        fun update(index: Int, change: (ParametricBand) -> ParametricBand) {
+            val next = MutableList(EqualizerDsp.MAX_PARAMETRIC) { settings.parametric.getOrElse(it) { ParametricBand() } }
+            next[index] = change(next[index])
+            save(settings.copy(parametric = next, presetName = ""))
+        }
+        for (index in 0 until shown) {
+            val band = current[index]
+            val holder = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            holder.addView(buttonFactory("Band ${index + 1}: ${band.describe()}  (tap to change type)") {
+                update(index) { it.copy(type = (it.type + 1) % 4) }
+                buildBody(body)
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(6) })
+            if (band.type != ParametricBand.OFF) {
+                holder.addView(sliderFactory("Frequency", frequencies, frequencies.minByOrNull { kotlin.math.abs(it - band.hz) } ?: 1000,
+                    { if (it >= 1000) "${it / 1000.0} kHz" else "$it Hz" }) { hz -> update(index) { it.copy(hz = hz) } })
+                holder.addView(sliderFactory("Gain", gains, Math.round(band.gainDb).coerceIn(-12, 12),
+                    { (if (it > 0) "+" else "") + "$it dB" }) { db -> update(index) { it.copy(gainTenths = db * 10) } })
+                if (band.type == ParametricBand.PEAK) {
+                    holder.addView(sliderFactory("Width (Q)", qTenths, qTenths.minByOrNull { kotlin.math.abs(it - band.qTenths) } ?: 10,
+                        { "Q ${it / 10.0}" + when { it <= 5 -> " · wide"; it >= 30 -> " · narrow"; else -> "" } }) { q -> update(index) { it.copy(qTenths = q) } })
+                }
+            }
+            body.addView(holder)
+        }
     }
 
     private fun LinearLayout.addView(view: View, params: LinearLayout.LayoutParams) = (this as ViewGroup).addView(view, params)

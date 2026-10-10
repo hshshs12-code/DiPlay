@@ -1152,10 +1152,10 @@ private class AudioRenderer(
             val fx = AudioEffectSettings.current(null)
             if (fx.enabled && fx.dspMode) {
                 eqDsp = EqualizerDsp(format.sampleRate, format.channels).also {
-                    it.configure(fx.dspGainsDb(), fx.limiter || softClip)
+                    it.configure(fx, softClip)
                     it.register()
                 }
-                runCatching { report("Audio: 12-band equalizer active rate=${format.sampleRate} channels=${format.channels} limiter=${fx.limiter || softClip}") }
+                runCatching { report("Audio: software chain active rate=${format.sampleRate} channels=${format.channels} limiter=${fx.limiter || softClip || fx.autoLevel} subsonic=${fx.subsonicHz} bassEnhance=${fx.bassEnhance} autoLevel=${fx.autoLevel} parametric=${fx.parametric.count { it.type != ParametricBand.OFF }}") }
             } else if (softClip) {
                 eqDsp = EqualizerDsp(format.sampleRate, format.channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
                 runCatching { report("Audio: soft clipper active") }

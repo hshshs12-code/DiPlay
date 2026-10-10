@@ -39,7 +39,25 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.22)
+## Fork features (0.2.13-legacy24.23)
+
+24.23: sound processing beyond the graphic EQ
+- `EqualizerDsp` is now a chain: subsonic high-pass (two cascaded Butterworth
+  sections, 24 dB/oct), the 12-band graphic EQ, up to five parametric bands
+  (peak / low shelf / high shelf, RBJ biquads), a psychoacoustic bass enhancer
+  (low band → rational saturation for odd + even harmonics → band-pass → mix),
+  a slow auto-level (peak envelope, ±12 dB, target −14 dBFS, 128-frame gain
+  updates) and the soft limiter. Neutral stages cost nothing.
+- `AudioEffectSettings` gains subsonicHz, bassEnhance(+Hz), autoLevel(+amount)
+  and `parametric` (persisted as "type:hz:gain10:q10"). The media sink and the
+  iPod engine configure the whole chain; live changes still apply through
+  `applyToActive`.
+- `SoundPresets.YARIS`: ten whole-chain presets for a 2018 Toyota Yaris with
+  stock door speakers (shared correction: −3 dB @170 Hz, −2 dB @3.2 kHz,
+  +2 dB high shelf @9 kHz), including Rage, 808 Heavy, Trap Clean, Melodic,
+  Highway, Windows Down, Night Drive, Podcast, Max Loud and Flat Corrected.
+- Equalizer panel: "Car sound presets" picker, Sound processing sliders and the
+  parametric band editor (12-band mode).
 
 24.22: direct USB audio driver for iPod mode
 - `usb_iso_audio.c` submits isochronous URBs through usbfs on the file

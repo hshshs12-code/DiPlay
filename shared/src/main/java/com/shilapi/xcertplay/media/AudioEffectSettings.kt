@@ -22,7 +22,22 @@ data class AudioEffectSettings(
     /** Soft limiter after the software equalizer; off by default. */
     val limiter: Boolean = false,
     val presetName: String = "",
+    /** Subsonic high-pass corner in Hz; 0 = off. */
+    val subsonicHz: Int = 0,
+    /** Psychoacoustic bass enhancer amount 0..100; 0 = off. */
+    val bassEnhance: Int = 0,
+    /** Crossover of the bass enhancer in Hz: content below it feeds the harmonic generator. */
+    val bassEnhanceHz: Int = 100,
+    /** Auto level (slow leveler) on/off and its strength 0..100 (100 = full normalisation). */
+    val autoLevel: Boolean = false,
+    val autoLevelAmount: Int = 50,
+    /** Up to five parametric bands applied after the graphic equalizer. */
+    val parametric: List<ParametricBand> = emptyList(),
 ) {
+    /** True when any stage beyond the graphic equalizer is active. */
+    fun hasAdvancedProcessing(): Boolean =
+        subsonicHz > 0 || bassEnhance > 0 || autoLevel || parametric.any { it.type != ParametricBand.OFF && it.gainTenths != 0 }
+
     fun dspGainsDb(): FloatArray = FloatArray(EqualizerDsp.BANDS) { dspGainsDb.getOrElse(it) { 0 }.toFloat() }
 
     /**
@@ -53,6 +68,12 @@ data class AudioEffectSettings(
         private const val KEY_DSP_GAINS = "dsp_gains_db"
         private const val KEY_LIMITER = "limiter"
         private const val KEY_PRESET = "preset"
+        private const val KEY_SUBSONIC = "subsonic_hz"
+        private const val KEY_BASS_ENHANCE = "bass_enhance"
+        private const val KEY_BASS_ENHANCE_HZ = "bass_enhance_hz"
+        private const val KEY_AUTO_LEVEL = "auto_level"
+        private const val KEY_AUTO_LEVEL_AMOUNT = "auto_level_amount"
+        private const val KEY_PARAMETRIC = "parametric"
         const val MAX_BASS = 1000
         const val MAX_LOUDNESS_MB = 2000
 
@@ -71,6 +92,12 @@ data class AudioEffectSettings(
                 dspGainsDb = List(EqualizerDsp.BANDS) { dsp.getOrElse(it) { 0 }.coerceIn(-12, 12) },
                 limiter = prefs.getBoolean(KEY_LIMITER, false),
                 presetName = prefs.getString(KEY_PRESET, "") ?: "",
+                subsonicHz = prefs.getInt(KEY_SUBSONIC, 0).coerceIn(0, 200),
+                bassEnhance = prefs.getInt(KEY_BASS_ENHANCE, 0).coerceIn(0, 100),
+                bassEnhanceHz = prefs.getInt(KEY_BASS_ENHANCE_HZ, 100).coerceIn(50, 200),
+                autoLevel = prefs.getBoolean(KEY_AUTO_LEVEL, false),
+                autoLevelAmount = prefs.getInt(KEY_AUTO_LEVEL_AMOUNT, 50).coerceIn(0, 100),
+                parametric = ParametricBand.decodeList(prefs.getString(KEY_PARAMETRIC, "")),
             ).also { cached = it; EqualizerDsp.headroom = it.headroomGain() }
         }
 
@@ -84,6 +111,12 @@ data class AudioEffectSettings(
                 .putString(KEY_DSP_GAINS, settings.dspGainsDb.joinToString(","))
                 .putBoolean(KEY_LIMITER, settings.limiter)
                 .putString(KEY_PRESET, settings.presetName)
+                .putInt(KEY_SUBSONIC, settings.subsonicHz)
+                .putInt(KEY_BASS_ENHANCE, settings.bassEnhance)
+                .putInt(KEY_BASS_ENHANCE_HZ, settings.bassEnhanceHz)
+                .putBoolean(KEY_AUTO_LEVEL, settings.autoLevel)
+                .putInt(KEY_AUTO_LEVEL_AMOUNT, settings.autoLevelAmount)
+                .putString(KEY_PARAMETRIC, settings.parametric.joinToString(",") { it.encode() })
                 .apply()
             cached = settings
             AudioEffectController.applyToActive(settings)
