@@ -61,7 +61,7 @@ class PlugInChooserActivity : Activity() {
         footer.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
         footer.addView(Switch(this).apply { isChecked = false; setOnCheckedChangeListener { _, v -> remember = v } })
         footer.addView(TextView(this).apply {
-            text = "Not now"; textSize = 15f; setTextColor(TEXT); gravity = Gravity.CENTER; setPadding(dp(18), dp(10), dp(18), dp(10))
+            this.text = "Not now"; textSize = 15f; setTextColor(TEXT); gravity = Gravity.CENTER; setPadding(dp(18), dp(10), dp(18), dp(10))
             background = rounded(Color.argb(36, 255, 255, 255), Color.argb(60, 255, 255, 255), 18); isClickable = true
             setOnClickListener { finish() }
         }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(16) })
