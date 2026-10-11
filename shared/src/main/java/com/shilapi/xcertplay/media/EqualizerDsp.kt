@@ -6,18 +6,19 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.log10
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tan
-import kotlin.math.tanh
 
 /**
  * DiPlay's software audio chain on 16-bit interleaved PCM, applied in place before the AudioTrack
  * write. Stages in order: subsonic high-pass, 12-band graphic equalizer, up to five parametric
- * bands, psychoacoustic bass enhancer, auto level, look-ahead limiter, TPDF dither.
+ * bands, volume-linked loudness compensation ([LoudnessCompensator]), de-essed air shelf
+ * ([AirShelf]), psychoacoustic bass enhancer ([BassEnhancer]), stereo stage (width, crossfeed,
+ * balance, driver-seat delay; see [StereoStage]), auto level ([Leveler]), true-peak look-ahead
+ * limiter ([TruePeakLimiter]), TPDF dither.
  *
  * Design notes, in the spirit of a car-audio DSP rather than a phone app:
  * - All filtering runs in double precision; the signal is quantised once, at the output, with
@@ -28,61 +29,78 @@ import kotlin.math.tanh
  * - The graphic equalizer is constant-Q per band spacing and its band gains are corrected for
  *   neighbour interaction, so +6 dB on adjacent sliders produces +6 dB, not +9.
  * - Coefficient changes are interpolated over ~30 ms so slider drags never click.
- * - The limiter is a true look-ahead peak limiter (2 ms) with a soft-knee safety stage after it,
- *   instead of a static waveshaper that distorts whenever it works.
+ * - The limiter ([TruePeakLimiter]) is a stereo-linked true-peak look-ahead limiter (2 ms): 4x
+ *   oversampled peak detection, a smooth gain envelope, hold plus dual release so bass is not
+ *   modulated, instead of a static waveshaper that distorts whenever it works.
  * Neutral stages are skipped, so the cost scales with what is switched on.
  */
 class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     /** A bank of biquads with target coefficients, interpolating current coefficients and state. */
     private inner class Bank(val count: Int) {
-        val target = DoubleArray(count * 5)
-        val current = DoubleArray(count * 5)
+        /** Published atomically by [commit] so the audio thread never reads a half-written design. */
+        @Volatile var target = identityDesign()
+            private set
+        val current = identityDesign()
         @Volatile var active = BooleanArray(count)
         @Volatile var any = false
+        /** The activity the design is heading for; adopted by [settle] once the ramp has finished. */
+        @Volatile private var pendingActive = BooleanArray(count)
         val state = DoubleArray(channels * count * 4)
-        fun set(index: Int, coefficients: DoubleArray) { System.arraycopy(coefficients, 0, target, index * 5, 5) }
-        fun identity(index: Int) { target[index * 5] = 1.0; for (k in 1..4) target[index * 5 + k] = 0.0 }
-        fun snap() { System.arraycopy(target, 0, current, 0, target.size) }
-        fun step(alpha: Double) { for (k in target.indices) current[k] += (target[k] - current[k]) * alpha }
+
+        private fun identityDesign() = DoubleArray(count * 5).also { for (i in 0 until count) it[i * 5] = 1.0 }
+        /** A fresh staging design: identity for every section until [set] overwrites it. */
+        fun begin(): DoubleArray = identityDesign()
+        fun set(design: DoubleArray, index: Int, coefficients: DoubleArray) { System.arraycopy(coefficients, 0, design, index * 5, 5) }
+
+        /**
+         * Publishes [design]. Sections that are switching off stay active while their coefficients
+         * ramp to identity, so removing a band is as click-free as adding one.
+         */
+        fun commit(design: DoubleArray, activeNext: BooleanArray) {
+            val previous = active
+            val merged = BooleanArray(count) { previous[it] || activeNext[it] }
+            pendingActive = activeNext
+            target = design
+            active = merged
+            any = merged.any { it }
+        }
+        fun snap() { System.arraycopy(target, 0, current, 0, current.size); settle() }
+        fun step(alpha: Double) { val t = target; for (k in current.indices) current[k] += (t[k] - current[k]) * alpha }
+        /** Ramp finished: drop the sections that ramped to identity. */
+        fun settle() { val next = pendingActive; active = next; any = next.any { it } }
+        /** Flushes subnormal filter memory so long silences cannot slow the arithmetic. */
+        fun flushDenormals() { for (i in state.indices) if (abs(state[i]) < DENORMAL_FLOOR) state[i] = 0.0 }
         fun clear() { state.fill(0.0) }
     }
 
     private val graphic = Bank(BANDS)
     private val parametric = Bank(MAX_PARAMETRIC)
     private val subsonic = Bank(2)
-    private val bass = Bank(3)
+    /** Psychoacoustic bass enhancer (LR4 split, envelope-tracked harmonic series); see [BassEnhancer]. */
+    private val bass = BassEnhancer(sampleRate, channels)
     @Volatile private var subsonicOn = false
-    @Volatile private var bassOn = false
-    private var bassGainTarget = 0.0
-    private var bassGain = 0.0
+    /** De-essed air shelf; see [AirShelf]. */
+    private val air = AirShelf(sampleRate, channels)
+    /** Volume-linked loudness compensation; see [LoudnessCompensator]. */
+    private val loudness = LoudnessCompensator(sampleRate, channels)
 
-    // Auto level: RMS envelope → slow gain
+    // Stereo stage (stereo streams only)
+    private val stage: StereoStage? = if (channels == 2) StereoStage(sampleRate) else null
+
+    // Auto level: gated, K-weighted program leveler (see Leveler)
     @Volatile private var autoOn = false
-    @Volatile private var autoStrength = 0.0
-    private var meanSquare = 0.0
-    private var agcGain = 1.0
-    private var agcDesired = 1.0
-    private var agcCounter = 0
-    private val envAttack = coefficient(0.050)
-    private val envRelease = coefficient(1.0)
-    private val gainAttack = coefficient(0.080)
-    private val gainRelease = coefficient(2.0)
+    private val leveler = Leveler(sampleRate, channels)
 
     // Look-ahead limiter
     @Volatile var limiter = false
         private set
     @Volatile private var softClipForced = false
-    private val lookahead = max(8, sampleRate * LOOKAHEAD_MICROS / 1_000_000)
-    private val delay = DoubleArray(lookahead * channels)
-    private val delayPeak = DoubleArray(lookahead)
-    private var limiterGain = 1.0
-    private val limiterRelease = coefficient(0.080)
+    private val truePeak = TruePeakLimiter(sampleRate, channels)
     private var scratch = DoubleArray(0)
-    private var peaks = DoubleArray(0)
-    private var required = DoubleArray(0)
 
     // Coefficient smoothing and dither
     private var smoothChunks = 0
+    private var denormalCounter = 0
     private var ditherState = 0x9E3779B9.toInt()
     private var floatOut: FloatArray? = null
     private var floatIndex = 0
@@ -96,6 +114,9 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         configureSubsonic(0)
         configureBass(0, 100)
         configureAutoLevel(false, 0)
+        stage?.configure(100, 0, 0, 0, 0)
+        air.configure(0, AirShelf.DEFAULT_HZ, 0, immediate = !configured)
+        loudness.configure(false, 0)
         setLimiter(limiter)
         finishConfigure()
     }
@@ -109,13 +130,22 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         configureSubsonic(if (active) settings.subsonicHz else 0)
         configureBass(if (active) settings.bassEnhance else 0, settings.bassEnhanceHz)
         configureAutoLevel(active && settings.autoLevel, settings.autoLevelAmount)
-        setLimiter(softClip || (active && (settings.limiter || settings.autoLevel)))
+        if (active) {
+            stage?.configure(settings.stereoWidth, settings.balance, settings.driverSeatDelayTenthsMs, settings.driverSide, settings.crossfeed)
+        } else {
+            stage?.configure(100, 0, 0, settings.driverSide, 0)
+        }
+        air.configure(if (active) settings.airDb else 0, settings.airHz, settings.deEss, immediate = !configured)
+        val loud = active && settings.loudnessComp
+        loudness.configure(loud, settings.loudnessCompAmount)
+        // Loudness compensation lifts bass by up to 15 dB at low volume: keep the limiter in front of the DAC.
+        setLimiter(softClip || (active && (settings.limiter || settings.autoLevel || loud)))
         finishConfigure()
     }
 
     private fun finishConfigure() {
         if (!configured) {
-            graphic.snap(); parametric.snap(); subsonic.snap(); bass.snap(); bassGain = bassGainTarget
+            graphic.snap(); parametric.snap(); subsonic.snap(); bass.snap()
             configured = true
         } else {
             smoothChunks = SMOOTH_CHUNKS
@@ -123,8 +153,10 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     }
 
     private fun setLimiter(on: Boolean) {
-        if (on && !limiter) { delay.fill(0.0); delayPeak.fill(0.0); limiterGain = 1.0 }
+        if (on && !limiter) truePeak.reset()
         limiter = on
+        // With a limiter after it the enhancer may exceed full scale; without one it guards its own headroom.
+        bass.headroomGuard = !on
     }
 
     // ---- stage configuration ------------------------------------------------------------------
@@ -146,22 +178,19 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
             }
         }
         val active = BooleanArray(BANDS)
-        for (band in 0 until BANDS) {
-            if (usable[band]) { graphic.set(band, sections[band]); active[band] = true } else graphic.identity(band)
-        }
-        graphic.active = active
-        graphic.any = active.any { it }
+        val design = graphic.begin()
+        for (band in 0 until BANDS) if (usable[band]) { graphic.set(design, band, sections[band]); active[band] = true }
+        graphic.commit(design, active)
     }
 
     private fun configureParametric(bands: List<ParametricBand>) {
         val active = BooleanArray(MAX_PARAMETRIC)
+        val design = parametric.begin()
         for (index in 0 until MAX_PARAMETRIC) {
             val band = bands.getOrNull(index)
             val gain = band?.gainDb?.coerceIn(MIN_DB, MAX_DB)?.toDouble() ?: 0.0
             val f = band?.hz?.toDouble() ?: 0.0
-            if (band == null || band.type == ParametricBand.OFF || abs(gain) < 0.05 || f < 10 || f >= sampleRate / 2.0) {
-                parametric.identity(index); continue
-            }
+            if (band == null || band.type == ParametricBand.OFF || abs(gain) < 0.05 || f < 10 || f >= sampleRate / 2.0) continue
             val q = band.q.coerceIn(0.3f, 8f).toDouble()
             val c = DoubleArray(5)
             when (band.type) {
@@ -169,37 +198,37 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
                 ParametricBand.HIGH_SHELF -> highShelf(c, f, gain, q)
                 else -> peakingOrfanidis(c, f, gain, q)
             }
-            parametric.set(index, c)
+            parametric.set(design, index, c)
             active[index] = true
         }
-        parametric.active = active
-        parametric.any = active.any { it }
+        parametric.commit(design, active)
     }
 
     private fun configureSubsonic(hz: Int) {
-        if (hz < 10 || hz >= sampleRate / 4) { subsonicOn = false; subsonic.identity(0); subsonic.identity(1); return }
+        val design = subsonic.begin()
+        if (hz < 10 || hz >= sampleRate / 4) {
+            // Ramps to identity, then the bank settles to inactive.
+            subsonic.commit(design, BooleanArray(2))
+            subsonicOn = subsonic.any
+            return
+        }
         val c = DoubleArray(5)
         highPass(c, hz.toDouble(), BUTTERWORTH_Q)
-        subsonic.set(0, c); subsonic.set(1, c)
+        subsonic.set(design, 0, c); subsonic.set(design, 1, c)
+        subsonic.commit(design, booleanArrayOf(true, true))
         subsonicOn = true
     }
 
     private fun configureBass(amount: Int, hz: Int) {
-        if (amount <= 0) { bassOn = false; bassGainTarget = 0.0; return }
-        val crossover = hz.coerceIn(50, 200).toDouble()
-        val low = DoubleArray(5); val high = DoubleArray(5); val top = DoubleArray(5)
-        lowPass(low, crossover, BUTTERWORTH_Q)
-        highPass(high, crossover, BUTTERWORTH_Q)
-        lowPass(top, min(crossover * 5.0, 900.0), BUTTERWORTH_Q)
-        bass.set(0, low); bass.set(1, high); bass.set(2, top)
-        bassGainTarget = amount.coerceIn(0, 100) / 100.0 * BASS_MIX
-        bassOn = true
+        bass.configure(amount, hz)
     }
 
     private fun configureAutoLevel(on: Boolean, amount: Int) {
-        autoStrength = amount.coerceIn(0, 100) / 100.0
-        if (on && !autoOn) { meanSquare = 0.0; agcGain = 1.0; agcDesired = 1.0; agcCounter = 0 }
-        autoOn = on && autoStrength > 0.0
+        val strength = amount.coerceIn(0, 100) / 100.0
+        leveler.strength = strength
+        val next = on && strength > 0.0
+        if (next && !autoOn) leveler.reset()
+        autoOn = next
     }
 
     // ---- processing ---------------------------------------------------------------------------
@@ -230,11 +259,16 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     /** Returns false when nothing is active and the data was left untouched. */
     private fun run(data: ByteArray, offset: Int, length: Int): Boolean {
         val useLimiter = limiter
-        val g = graphic.any; val p = parametric.any; val sub = subsonicOn; val b = bassOn; val auto = autoOn
-        if (!g && !p && !sub && !b && !auto && !useLimiter) return false
+        val g = graphic.any; val p = parametric.any; val sub = subsonicOn; val b = bass.active; val auto = autoOn
+        val stereo = stage
+        val st = stereo != null && stereo.isActive()
+        val airOn = air.isActive
+        val loudStage = loudness.enabled || loudness.busy
+        if (!g && !p && !sub && !b && !auto && !st && !airOn && !loudStage && !useLimiter) return false
         val frames = length / (2 * channels)
         if (frames <= 0) return false
         ensureScratch(frames)
+        if (st) stereo!!.beginBlock()
         val gActive = graphic.active; val pActive = parametric.active
         var index = offset
         var produced = 0
@@ -243,14 +277,18 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
             if (smoothChunks > 0) {
                 val alpha = 1.0 / smoothChunks
                 graphic.step(alpha); parametric.step(alpha); subsonic.step(alpha); bass.step(alpha)
-                bassGain += (bassGainTarget - bassGain) * alpha
-                smoothChunks--
+                if (--smoothChunks == 0) {
+                    graphic.settle(); parametric.settle(); subsonic.settle()
+                    subsonicOn = subsonic.any
+                }
             }
-            val gc = graphic.current; val pc = parametric.current; val sc = subsonic.current; val bc = bass.current
-            val bg = bassGain
+            if (++denormalCounter >= DENORMAL_FLUSH_CHUNKS) {
+                denormalCounter = 0
+                graphic.flushDenormals(); parametric.flushDenormals(); subsonic.flushDenormals()
+            }
+            val gc = graphic.current; val pc = parametric.current; val sc = subsonic.current
+            val l = loudStage && loudness.prepare(chunk)
             for (n in produced until produced + chunk) {
-                var mono = 0.0
-                var peak = 0.0
                 for (ch in 0 until channels) {
                     val o = index + ch * 2
                     var x = (((data[o + 1].toInt() shl 8) or (data[o].toInt() and 0xff)).toDouble()) / 32768.0
@@ -267,109 +305,29 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
                         val base = ch * MAX_PARAMETRIC * 4
                         for (band in 0 until MAX_PARAMETRIC) if (pActive[band]) x = biquad(x, pc, band * 5, parametric.state, base + band * 4)
                     }
-                    if (b) {
-                        val s = ch * 12
-                        val low = biquad(x, bc, 0, bass.state, s)
-                        val u = low * BASS_DRIVE
-                        val a = abs(u)
-                        val sat = a / (1.0 + a)
-                        // Odd harmonics from the symmetric part, even harmonics from the rectified part.
-                        var h = (if (u < 0) -sat else sat) + BASS_EVEN * sat * sat
-                        h = biquad(h, bc, 5, bass.state, s + 4)
-                        h = biquad(h, bc, 10, bass.state, s + 8)
-                        x += h * bg
-                    }
+                    if (l) x = loudness.processSample(x, ch)
                     frame[ch] = x
-                    mono += x
                 }
-                if (auto) {
-                    mono /= channels
-                    val square = mono * mono
-                    meanSquare += (square - meanSquare) * (if (square > meanSquare) envAttack else envRelease)
-                    if (++agcCounter >= AGC_UPDATE_FRAMES) {
-                        agcCounter = 0
-                        val rms = sqrt(meanSquare)
-                        if (rms > AGC_GATE) agcDesired = (AGC_TARGET_RMS / rms).pow(autoStrength).coerceIn(AGC_MIN_GAIN, AGC_MAX_GAIN)
-                    }
-                    agcGain += (agcDesired - agcGain) * (if (agcDesired < agcGain) gainAttack else gainRelease)
-                }
-                val gain = if (auto) agcGain else 1.0
+                // Stereo-linked stages: one mono control path for all channels.
+                if (airOn) air.processFrame(frame)
+                if (b) bass.process(frame)
+                if (st) stereo!!.processFrame(frame)
+                val gain = if (auto) leveler.process(frame) else 1.0
                 val at = n * channels
-                for (ch in 0 until channels) {
-                    val x = frame[ch] * gain
-                    scratch[at + ch] = x
-                    val m = abs(x)
-                    if (m > peak) peak = m
-                }
-                peaks[n] = peak
+                for (ch in 0 until channels) scratch[at + ch] = frame[ch] * gain
                 index += channels * 2
             }
             produced += chunk
         }
-        if (useLimiter) writeLimited(data, offset, frames) else writeDirect(data, offset, frames)
+        if (useLimiter) truePeak.process(scratch, frames)
+        writeDirect(data, offset, frames)
         return true
     }
 
-    /** No limiter: quantise the processed block with dither. */
+    /** Quantises the processed (and, when on, limited) block with dither. */
     private fun writeDirect(data: ByteArray, offset: Int, frames: Int) {
         var o = offset
         for (i in 0 until frames * channels) { put(data, o, scratch[i]); o += 2 }
-    }
-
-    /**
-     * Look-ahead limiter. The output lags the input by [lookahead] frames; the gain for each
-     * output frame is the minimum required over the next [lookahead] frames, reached by a linear
-     * ramp (attack) and recovered with an exponential release, so peaks are caught before they
-     * arrive and the waveform itself is not bent.
-     */
-    private fun writeLimited(data: ByteArray, offset: Int, frames: Int) {
-        val total = lookahead + frames
-        // required[i]: gain needed so that frame i of (delay ++ current) stays under the ceiling.
-        for (i in 0 until lookahead) required[i] = if (delayPeak[i] > CEILING) CEILING / delayPeak[i] else 1.0
-        for (i in 0 until frames) required[lookahead + i] = if (peaks[i] > CEILING) CEILING / peaks[i] else 1.0
-        // Backward pass: let the gain rise by at most `step` per frame going back in time, which is a
-        // forward-time ramp down to each peak over the look-ahead window.
-        val step = 1.0 / lookahead
-        for (i in total - 2 downTo 0) {
-            val allowed = required[i + 1] + step
-            if (allowed < required[i]) required[i] = allowed
-        }
-        var gain = limiterGain
-        var o = offset
-        for (i in 0 until frames) {
-            val target = required[i]
-            gain = if (target < gain) target else gain + (target - gain) * limiterRelease
-            // Output frame i is the oldest delayed frame; the current frame i takes its place.
-            val slot = i % lookahead
-            val di = slot * channels
-            val si = i * channels
-            for (ch in 0 until channels) {
-                var x = delay[di + ch] * gain
-                val m = abs(x)
-                if (m > CEILING) { // safety stage: only reached by content faster than the look-ahead
-                    val soft = CEILING + (SAFETY_MAX - CEILING) * tanh((m - CEILING) / (SAFETY_MAX - CEILING))
-                    x = if (x < 0) -soft else soft
-                }
-                put(data, o, x); o += 2
-                delay[di + ch] = scratch[si + ch]
-            }
-            delayPeak[slot] = peaks[i]
-        }
-        limiterGain = gain
-        if (frames % lookahead != 0) rotateDelay(frames % lookahead)
-    }
-
-    /** Keeps the delay line ordered oldest-first after a block that did not fill whole rounds. */
-    private fun rotateDelay(by: Int) {
-        val tmp = DoubleArray(delay.size)
-        val tmpPeak = DoubleArray(lookahead)
-        for (i in 0 until lookahead) {
-            val from = (i + by) % lookahead
-            System.arraycopy(delay, from * channels, tmp, i * channels, channels)
-            tmpPeak[i] = delayPeak[from]
-        }
-        System.arraycopy(tmp, 0, delay, 0, delay.size)
-        System.arraycopy(tmpPeak, 0, delayPeak, 0, lookahead)
     }
 
     /** 16-bit output with TPDF dither (two uniform draws, ±1 LSB triangular), or float when rendering to float. */
@@ -382,22 +340,21 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         r = r xor (r shl 13); r = r xor (r ushr 17); r = r xor (r shl 5)
         val d2 = (r and 0xffff) / 65536.0
         ditherState = r
-        val v = Math.round(x * 32767.0 + (d1 - d2)).toInt().coerceIn(-32768, 32767)
+        // Same 32768 scale as the input so a neutral chain returns the sample exactly (± dither).
+        val v = Math.round(x * 32768.0 + (d1 - d2)).toInt().coerceIn(-32768, 32767)
         data[o] = v.toByte()
         data[o + 1] = (v shr 8).toByte()
     }
 
     private fun ensureScratch(frames: Int) {
         if (scratch.size < frames * channels) scratch = DoubleArray(frames * channels)
-        if (peaks.size < frames) peaks = DoubleArray(frames)
-        if (required.size < frames + lookahead) required = DoubleArray(frames + lookahead)
     }
 
     /** Current auto-level gain in dB, for the UI. */
-    fun autoLevelGainDb(): Float = if (autoOn) (20.0 * log10(agcGain)).toFloat() else 0f
+    fun autoLevelGainDb(): Float = if (autoOn) leveler.gainDb() else 0f
 
     /** Output delay introduced by the chain, in frames (the limiter's look-ahead when it is on). */
-    fun latencyFrames(): Int = if (limiter) lookahead else 0
+    fun latencyFrames(): Int = if (limiter) truePeak.latencyFrames else 0
 
     private fun biquad(x: Double, c: DoubleArray, k: Int, s: DoubleArray, i: Int): Double {
         val y = c[k] * x + c[k + 1] * s[i] + c[k + 2] * s[i + 1] - c[k + 3] * s[i + 2] - c[k + 4] * s[i + 3]
@@ -485,13 +442,6 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         store(out, (1 + cosW0) / 2, -(1 + cosW0), (1 + cosW0) / 2, 1 + alpha, -2 * cosW0, 1 - alpha)
     }
 
-    private fun lowPass(out: DoubleArray, f: Double, q: Double) {
-        val w0 = 2.0 * PI * f / sampleRate
-        val alpha = sin(w0) / (2.0 * q)
-        val cosW0 = cos(w0)
-        store(out, (1 - cosW0) / 2, 1 - cosW0, (1 - cosW0) / 2, 1 + alpha, -2 * cosW0, 1 - alpha)
-    }
-
     /** Magnitude response of one section at [f] in dB. */
     internal fun magnitudeDb(c: DoubleArray, f: Double): Double {
         val w = 2.0 * PI * f / sampleRate
@@ -524,20 +474,9 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         private const val INTERACTION_ITERATIONS = 6
         private const val INTERACTION_DAMPING = 0.8
         private const val SMOOTH_CHUNK_FRAMES = 64
+        private const val DENORMAL_FLOOR = 1e-30
+        private const val DENORMAL_FLUSH_CHUNKS = 64
         private const val SMOOTH_CHUNKS = 24
-        private const val LOOKAHEAD_MICROS = 2_000
-        /** Peaks settle just under full scale so rounding never produces a hard-clipped sample. */
-        private const val CEILING = 0.985
-        private const val SAFETY_MAX = 0.999
-        private const val BASS_DRIVE = 6.0
-        private const val BASS_EVEN = 0.6
-        private const val BASS_MIX = 1.0
-        /** Auto level aims the RMS envelope at about -16 dBFS. */
-        private const val AGC_TARGET_RMS = 0.16
-        private const val AGC_GATE = 0.002
-        private const val AGC_MIN_GAIN = 0.25
-        private const val AGC_MAX_GAIN = 4.0
-        private const val AGC_UPDATE_FRAMES = 128
         private val active: MutableSet<EqualizerDsp> = Collections.synchronizedSet(mutableSetOf<EqualizerDsp>())
 
         fun applyToActive(settings: AudioEffectSettings) {
@@ -556,7 +495,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
             val end = offset + length - 1
             while (i < end) {
                 val v = ((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xff))
-                val s = (v * gain).toInt().coerceIn(-32768, 32767)
+                val s = Math.round(v * gain).coerceIn(-32768, 32767)
                 data[i] = s.toByte(); data[i + 1] = (s shr 8).toByte()
                 i += 2
             }

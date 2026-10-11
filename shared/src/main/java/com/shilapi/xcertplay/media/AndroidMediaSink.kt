@@ -1170,7 +1170,7 @@ private class AudioRenderer(
                     it.configure(fx, softClip)
                     it.register()
                 }
-                runCatching { report("Audio: software chain active rate=${format.sampleRate} channels=${format.channels} limiter=${fx.limiter || softClip || fx.autoLevel} subsonic=${fx.subsonicHz} bassEnhance=${fx.bassEnhance} autoLevel=${fx.autoLevel} parametric=${fx.parametric.count { it.type != ParametricBand.OFF }}") }
+                runCatching { report("Audio: software chain active rate=${format.sampleRate} channels=${format.channels} limiter=${fx.limiter || softClip || fx.autoLevel || fx.loudnessComp} subsonic=${fx.subsonicHz} bassEnhance=${fx.bassEnhance} autoLevel=${fx.autoLevel} loudnessComp=${if (fx.loudnessComp) fx.loudnessCompAmount else 0} parametric=${fx.parametric.count { it.type != ParametricBand.OFF }}") }
             } else if (softClip) {
                 eqDsp = EqualizerDsp(format.sampleRate, format.channels).also { it.configure(FloatArray(EqualizerDsp.BANDS), limiter = true) }
                 runCatching { report("Audio: soft clipper active") }

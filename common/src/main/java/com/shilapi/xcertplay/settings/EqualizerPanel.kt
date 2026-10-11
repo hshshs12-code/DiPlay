@@ -2,10 +2,13 @@ package com.shilapi.xcertplay.settings
 
 import android.app.AlertDialog
 import android.content.Context
+import android.media.AudioManager
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.shilapi.xcertplay.media.AirShelf
+import com.shilapi.xcertplay.LoudnessVolumeTracker
 import com.shilapi.xcertplay.media.AudioEffectSettings
 import com.shilapi.xcertplay.media.EqPresets
 import com.shilapi.xcertplay.media.EqualizerDsp
@@ -138,7 +141,7 @@ class EqualizerPanel(
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(12) })
     }
 
-    /** Subsonic filter, bass enhancer, auto level and the parametric bands (12-band mode only). */
+    /** Subsonic filter, bass enhancer, auto level, air shelf and the parametric bands (12-band mode only). */
     private fun buildAdvanced(body: LinearLayout) {
         body.addView(TextView(context).apply {
             text = "Sound processing"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
@@ -161,6 +164,14 @@ class EqualizerPanel(
         })
         body.addView(sliderFactory("Auto level strength", (0..100 step 10).toList(), settings.autoLevelAmount / 10 * 10,
             { if (it == 0) "Off" else "$it %" }) { save(settings.copy(autoLevelAmount = it, presetName = "")) })
+        body.addView(sliderFactory("Air (high shelf)", (0..AirShelf.MAX_DB).toList(), settings.airDb.coerceIn(0, AirShelf.MAX_DB),
+            { if (it == 0) "Off" else "+$it dB · lifts the top for the dash tweeters" }) { save(settings.copy(airDb = it, presetName = "")) })
+        body.addView(sliderFactory("Air corner", AirShelf.CORNERS_HZ, AirShelf.snapCorner(settings.airHz),
+            { "above ${it / 1000} kHz" }) { save(settings.copy(airHz = it, presetName = "")) })
+        body.addView(sliderFactory("De-ess", (0..100 step 10).toList(), settings.deEss.coerceIn(0, 100) / 10 * 10,
+            { if (it == 0) "Off · air stays fixed" else "$it % · eases the air off on harsh \"s\" sounds" }) { save(settings.copy(deEss = it, presetName = "")) })
+        buildLoudness(body)
+        buildStereo(body)
 
         body.addView(TextView(context).apply {
             text = "Parametric EQ"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
@@ -198,6 +209,56 @@ class EqualizerPanel(
             }
             body.addView(holder)
         }
+    }
+
+    /** Volume-linked loudness compensation: switch, amount and the reference volume step. */
+    /** Stereo stage: width, balance, driver-seat delay, crossfeed. */
+    private fun buildStereo(body: LinearLayout) {
+        body.addView(TextView(context).apply {
+            text = "Stereo stage"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
+        })
+        body.addView(TextView(context).apply {
+            text = "Image and seat position. Bass stays mono at any width; the driver-seat delay moves the centre of the image toward the driver by delaying the near speaker."
+            textSize = 13f; setTextColor(mutedColor); setPadding(0, 0, 0, dp(4))
+        })
+        body.addView(sliderFactory("Stereo width", (0..AudioEffectSettings.MAX_STEREO_WIDTH step 10).toList(), settings.stereoWidth.coerceIn(0, AudioEffectSettings.MAX_STEREO_WIDTH) / 10 * 10,
+            { when { it == 100 -> "100 % · as recorded"; it == 0 -> "0 % · mono"; it < 100 -> "$it % · narrower"; else -> "$it % · wider (above 200 Hz only)" } }) {
+            save(settings.copy(stereoWidth = it, presetName = ""))
+        })
+        body.addView(sliderFactory("Balance", (-AudioEffectSettings.MAX_BALANCE..AudioEffectSettings.MAX_BALANCE step 10).toList(), settings.balance.coerceIn(-100, 100) / 10 * 10,
+            { when { it == 0 -> "Centre"; it < 0 -> "${-it} % left"; else -> "$it % right" } }) { save(settings.copy(balance = it, presetName = "")) })
+        body.addView(sliderFactory("Driver-seat delay", (0..AudioEffectSettings.MAX_DRIVER_DELAY_TENTHS step 2).toList(), settings.driverSeatDelayTenthsMs.coerceIn(0, AudioEffectSettings.MAX_DRIVER_DELAY_TENTHS) / 2 * 2,
+            { if (it == 0) "Off" else "%.1f ms on the near speaker (about %d cm)".format(it / 10.0, it * 34 / 10) }) { save(settings.copy(driverSeatDelayTenthsMs = it, presetName = "")) })
+        body.addView(switchFactory("Driver sits on the right", settings.driverSide == AudioEffectSettings.DRIVER_RIGHT,
+            "Off for left-hand-drive cars. Tells the delay which speaker is nearer the driver.") {
+            save(settings.copy(driverSide = if (it) AudioEffectSettings.DRIVER_RIGHT else AudioEffectSettings.DRIVER_LEFT))
+        })
+        body.addView(sliderFactory("Crossfeed", (0..AudioEffectSettings.MAX_CROSSFEED step 10).toList(), settings.crossfeed.coerceIn(0, 100) / 10 * 10,
+            { if (it == 0) "Off" else "$it % · gentle low-frequency bleed between sides for a more natural image" }) { save(settings.copy(crossfeed = it, presetName = "")) })
+    }
+
+    private fun buildLoudness(body: LinearLayout) {
+        val detected = runCatching { LoudnessVolumeTracker.describe(context) }.getOrDefault("")
+        body.addView(switchFactory("Loudness compensation (volume-linked)", settings.loudnessComp,
+            "Keeps bass and treble full when you turn the volume down, following ISO 226 hearing curves " +
+                "(bass shelf at 100 Hz, treble shelf at 8 kHz). Works only when the car's knob is Android's media volume; " +
+                "with a hardware knob it stays neutral. Turns the soft limiter on while active." +
+                (if (detected.isNotEmpty()) "\n$detected" else "")) {
+            save(settings.copy(loudnessComp = it, presetName = ""))
+            LoudnessVolumeTracker.refresh(context)
+        })
+        body.addView(sliderFactory("Loudness amount", (0..100 step 10).toList(), settings.loudnessCompAmount / 10 * 10,
+            { if (it == 0) "Off" else "$it % · at −20 dB: bass +${"%.0f".format(6.2 * it / 100)} dB" }) {
+            save(settings.copy(loudnessCompAmount = it, presetName = ""))
+        })
+        val maxStep = runCatching { context.getSystemService(AudioManager::class.java)?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
+            .getOrNull()?.takeIf { it > 0 } ?: 15
+        val steps = (0..maxStep).toList()
+        body.addView(sliderFactory("Reference volume step", steps, settings.loudnessCompReferenceStep.coerceIn(0, maxStep),
+            { if (it == 0 || it == maxStep) "Maximum ($maxStep) · no compensation at full volume" else "Step $it of $maxStep · no compensation at or above it" }) {
+            save(settings.copy(loudnessCompReferenceStep = it))
+            LoudnessVolumeTracker.refresh(context)
+        })
     }
 
     private fun LinearLayout.addView(view: View, params: LinearLayout.LayoutParams) = (this as ViewGroup).addView(view, params)

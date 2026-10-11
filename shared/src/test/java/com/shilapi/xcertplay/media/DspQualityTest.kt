@@ -25,6 +25,13 @@ class DspQualityTest {
         return out.toDoubleArray()
     }
 
+    private fun right(data: ByteArray): DoubleArray {
+        val out = ArrayList<Double>()
+        var i = 2
+        while (i + 1 < data.size) { out += ((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xff)) / 32768.0; i += 4 }
+        return out.toDoubleArray()
+    }
+
     private fun rms(x: DoubleArray) = sqrt(x.sumOf { it * it } / x.size)
     private fun gainDb(hz: Double, rate: Int, configure: (EqualizerDsp) -> Unit): Double {
         val dsp = EqualizerDsp(rate, 2); configure(dsp)
@@ -66,13 +73,17 @@ class DspQualityTest {
         hot.process(h, 0, h.size)
         val peak = left(h, rate / 2).maxOf { abs(it) }
         assertTrue("limited peak $peak should sit at the 0.985 ceiling", peak > 0.95 && peak <= 0.99)
-        assertEquals(96, hot.latencyFrames())
+        assertEquals(96, hot.latencyFrames()) // 2 ms look-ahead, unchanged by the true-peak limiter
+        assertEquals(88, EqualizerDsp(44_100, 2).also { it.configure(FloatArray(12), limiter = true) }.latencyFrames())
+        assertEquals(0, EqualizerDsp(rate, 2).also { it.configure(FloatArray(12), limiter = false) }.latencyFrames())
     }
 
     @Test fun limiterWorksAcrossOddBlockSizes() {
         val rate = 48_000
         val dsp = EqualizerDsp(rate, 2).also { it.configure(FloatArray(12).also { g -> g[5] = 12f }, limiter = true) }
         val data = tone(1_000.0, rate, rate, 0.9)
+        val whole = data.copyOf()
+        EqualizerDsp(rate, 2).also { it.configure(FloatArray(12).also { g -> g[5] = 12f }, limiter = true) }.process(whole, 0, whole.size)
         var offset = 0
         val sizes = intArrayOf(100, 37, 1000, 3, 777, 4096)
         var k = 0
@@ -82,10 +93,28 @@ class DspQualityTest {
             dsp.process(data, offset, bytes)
             offset += bytes
         }
-        val peak = left(data, rate / 2).maxOf { abs(it) }
-        assertTrue("peak $peak must stay under the ceiling regardless of block size", peak <= 0.99)
+        assertTrue("limited output must be identical for any block split", whole.contentEquals(data))
+        val peak = maxOf(left(data, 0).maxOf { abs(it) }, right(data).maxOf { abs(it) })
+        assertTrue("peak $peak must not exceed the 0.985 ceiling regardless of block size", peak <= 0.985)
         val tail = left(data, rate / 2)
         assertTrue("tone should still be continuous (rms ${rms(tail)})", rms(tail) > 0.5)
+    }
+
+    @Test fun limiterIsTransparentForMinusTenDbfsAndDelaysByItsLatency() {
+        val rate = 48_000
+        val dsp = EqualizerDsp(rate, 2).also { it.configure(FloatArray(12), limiter = true) }
+        val amplitude = 0.316 * sqrt(2.0) // -10 dBFS RMS
+        val input = tone(1_000.0, rate, rate, amplitude)
+        val out = input.copyOf()
+        dsp.process(out, 0, out.size)
+        val latency = dsp.latencyFrames()
+        assertEquals(96, latency)
+        val a = left(input, 0); val b = left(out, 0)
+        var worst = 0.0
+        for (i in 0 until a.size - latency) worst = maxOf(worst, abs(b[i + latency] - a[i]))
+        assertTrue("output must be the input delayed by latencyFrames, within dither (${worst * 32768} LSB)", worst <= 1.0 / 32768)
+        val dB = 20 * Math.log10(rms(b.copyOfRange(latency + 4800, b.size)) / rms(a.copyOfRange(4800, a.size - latency)))
+        assertTrue("level change $dB dB must be within 0.01 dB", abs(dB) < 0.01)
     }
 
     @Test fun coefficientChangesSettleWithoutClicks() {

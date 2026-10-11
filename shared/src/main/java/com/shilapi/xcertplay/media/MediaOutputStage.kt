@@ -46,17 +46,17 @@ class MediaOutputStage(
         }
         if (floatOutput) return Rendered(floats, null, count * 4)
         if (outBytes.size < count * 2) outBytes = ByteArray(count * 2)
+        var r = ditherState
         for (i in 0 until count) {
-            // TPDF dither at the only requantisation point.
-            var r = ditherState
+            // TPDF dither at the only requantisation point: the two 16-bit halves of one xorshift
+            // draw are the two uniforms, their difference is triangular over ±1 LSB.
             r = r xor (r shl 13); r = r xor (r ushr 17); r = r xor (r shl 5)
-            val d1 = (r and 0xffff) / 65536.0f
-            r = r xor (r shl 13); r = r xor (r ushr 17); r = r xor (r shl 5)
-            val d2 = (r and 0xffff) / 65536.0f
-            ditherState = r
-            val v = Math.round(floats[i] * 32767f + (d1 - d2)).coerceIn(-32768, 32767)
+            val d = ((r and 0xffff) - (r ushr 16)) * (1f / 65536f)
+            // Same 32768 scale as [convert], so an unprocessed sample comes back exactly (± dither).
+            val v = Math.floor((floats[i] * 32768f + d).toDouble() + 0.5).toInt().coerceIn(-32768, 32767)
             outBytes[i * 2] = v.toByte(); outBytes[i * 2 + 1] = (v shr 8).toByte()
         }
+        ditherState = r
         return Rendered(null, outBytes, count * 2)
     }
 
@@ -64,7 +64,7 @@ class MediaOutputStage(
         fun convert(data: ByteArray, offset: Int, samples: Int, out: FloatArray) {
             var o = offset
             for (i in 0 until samples) {
-                out[i] = ((data[o + 1].toInt() shl 8) or (data[o].toInt() and 0xff)) / 32768f
+                out[i] = ((data[o + 1].toInt() shl 8) or (data[o].toInt() and 0xff)) * (1f / 32768f)
                 o += 2
             }
         }

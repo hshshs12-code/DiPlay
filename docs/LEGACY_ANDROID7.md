@@ -39,7 +39,32 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.33)
+## Fork features (0.2.13-legacy24.34)
+
+24.34: professional sound-processing pass (seven parallel DSP work streams, merged by hand)
+- `BassEnhancer`: Linkwitz-Riley 4th-order band split with matching all-pass, peak envelope with
+  25 ms hold / 60 ms release, Chebyshev T2/T3/T4 harmonic generator driven at unit amplitude so
+  harmonic level tracks the sub band (2:1 above −12 dBFS), harmonics band-limited 1.5×–6× the
+  crossover (≤700 Hz), sub-band trim up to −6 dB at full amount, clip guard when the limiter is off.
+- `Leveler`: K-weighted (60 Hz HPF + 1.5 kHz +4 dB shelf) gated program leveler, −14 LUFS target,
+  absolute (−50 LU) and relative (−20 LU) gates, momentary + long-term estimates for program-
+  dependent release, 0.3 s hold, slew-limited attack/release, ±12 dB.
+- `StereoStage`: mid/side width (side high-passed at 200 Hz when widening), constant-power
+  balance, fractional driver-seat delay (Lagrange), Bauer crossfeed; 20 ms gain ramps, glided
+  delay; settings stereo_width / balance / driver_seat_delay_tenths_ms / driver_side / crossfeed.
+- `TruePeakLimiter`: 4× oversampled true-peak detection (12-tap Kaiser polyphase), sliding-min
+  look-ahead with 20 ms hold, dual release (50 ms / 500 ms program-dependent), Hann-like attack via
+  cascaded moving averages, stereo-linked, hard clip at 0.999; bass THD < 0.0001 %.
+- `AirShelf`: de-essed air shelf (air_db 0–8, air_hz 6/8/10/12 kHz, de_ess 0–100): one shelf per
+  channel crossfaded by a sibilance detector (5–9 kHz band vs broadband, 1 ms attack).
+- `LoudnessCompensator` + `LoudnessVolumeTracker`: ISO 226-derived low shelf (100 Hz) and high
+  shelf (8 kHz) driven by the Android media-volume index when the knob is the software volume
+  (loudness_comp / loudness_comp_amount / loudness_comp_reference), 200 ms ramps.
+- Chain order: subsonic → graphic → parametric → loudness → air → bass → stereo → leveler →
+  limiter → dither. Yaris presets updated (driver-seat delay 1.2 ms, air +3 dB, loudness on Night
+  Drive / Rage / Trap Clean). EQ panel: Stereo stage, Air and Loudness sections.
+- Cost on the dev JVM with every stage on: ~365 ns per stereo frame at 48 kHz (1.8 % of a desktop
+  core); the typical preset runs well under that.
 
 24.33: iPod audio confirmed on the car; fullscreen; latency guard; charge readout
 - Fifth on-car report (24.32, iPhone 16 Pro Max): the full identity with 32/44.1/48 kHz

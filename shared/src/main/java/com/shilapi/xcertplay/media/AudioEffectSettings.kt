@@ -33,10 +33,37 @@ data class AudioEffectSettings(
     val autoLevelAmount: Int = 50,
     /** Up to five parametric bands applied after the graphic equalizer. */
     val parametric: List<ParametricBand> = emptyList(),
+    /** Stereo width 0..200 %: 100 = unchanged, 0 = mono, above 100 widens above ~200 Hz only. */
+    val stereoWidth: Int = 100,
+    /** Balance −100 (left only) .. 100 (right only), constant-power pan law; 0 = centre. */
+    val balance: Int = 0,
+    /** Delay of the speaker nearest the driver in tenths of a millisecond, 0..60 (0..6 ms). */
+    val driverSeatDelayTenthsMs: Int = 0,
+    /** Which side the driver sits on: [DRIVER_LEFT] (left-hand drive) or [DRIVER_RIGHT]. */
+    val driverSide: Int = DRIVER_LEFT,
+    /** Bauer-style low-frequency crossfeed amount 0..100; 0 = off. */
+    val crossfeed: Int = 0,
+    /** De-essed air shelf: static high-shelf boost in whole dB, 0..8; 0 = off. */
+    val airDb: Int = 0,
+    /** Corner of the air shelf in Hz, one of [AirShelf.CORNERS_HZ]. */
+    val airHz: Int = AirShelf.DEFAULT_HZ,
+    /** How hard sibilance pulls the air shelf back, 0..100; 0 = static shelf. */
+    val deEss: Int = AirShelf.DEFAULT_DE_ESS,
+    /** Volume-linked equal-loudness compensation (ISO 226); only meaningful with a software volume knob. */
+    val loudnessComp: Boolean = false,
+    /** Strength of the loudness compensation 0..100 (100 = full ISO 226 difference). */
+    val loudnessCompAmount: Int = 60,
+    /** Android media volume step treated as the reference level (no compensation); 0 = the maximum step. */
+    val loudnessCompReferenceStep: Int = 0,
 ) {
     /** True when any stage beyond the graphic equalizer is active. */
     fun hasAdvancedProcessing(): Boolean =
-        subsonicHz > 0 || bassEnhance > 0 || autoLevel || parametric.any { it.type != ParametricBand.OFF && it.gainTenths != 0 }
+        subsonicHz > 0 || bassEnhance > 0 || autoLevel || airDb > 0 || (loudnessComp && loudnessCompAmount > 0) ||
+            parametric.any { it.type != ParametricBand.OFF && it.gainTenths != 0 } || hasStereoStage()
+
+    /** True when the stereo stage (width, balance, driver-seat delay, crossfeed) changes the signal. */
+    fun hasStereoStage(): Boolean =
+        stereoWidth != 100 || balance != 0 || driverSeatDelayTenthsMs > 0 || crossfeed > 0
 
     fun dspGainsDb(): FloatArray = FloatArray(EqualizerDsp.BANDS) { dspGainsDb.getOrElse(it) { 0 }.toFloat() }
 
@@ -49,7 +76,10 @@ data class AudioEffectSettings(
         if (!enabled) return 1f
         var boostDb = 0f
         if (dspMode) {
-            if (!limiter) boostDb = maxOf(boostDb, (dspGainsDb.maxOrNull() ?: 0).toFloat())
+            if (!limiter) {
+                boostDb = maxOf(boostDb, (dspGainsDb.maxOrNull() ?: 0).toFloat())
+                boostDb = maxOf(boostDb, StereoStage.boostDb(stereoWidth, balance).toFloat())
+            }
         } else {
             boostDb = maxOf(boostDb, (bandLevelsMb.maxOrNull() ?: 0) / 100f)
         }
@@ -74,8 +104,27 @@ data class AudioEffectSettings(
         private const val KEY_AUTO_LEVEL = "auto_level"
         private const val KEY_AUTO_LEVEL_AMOUNT = "auto_level_amount"
         private const val KEY_PARAMETRIC = "parametric"
+        private const val KEY_STEREO_WIDTH = "stereo_width"
+        private const val KEY_BALANCE = "balance"
+        private const val KEY_DRIVER_DELAY = "driver_seat_delay_tenths_ms"
+        private const val KEY_DRIVER_SIDE = "driver_side"
+        private const val KEY_CROSSFEED = "crossfeed"
+        private const val KEY_AIR_DB = "air_db"
+        private const val KEY_AIR_HZ = "air_hz"
+        private const val KEY_DE_ESS = "de_ess"
+        private const val KEY_LOUDNESS_COMP = "loudness_comp"
+        private const val KEY_LOUDNESS_COMP_AMOUNT = "loudness_comp_amount"
+        private const val KEY_LOUDNESS_COMP_REFERENCE = "loudness_comp_reference"
+        /** Upper bound for the stored reference step; real units have 15..40 media volume steps. */
+        const val MAX_VOLUME_STEP = 100
         const val MAX_BASS = 1000
         const val MAX_LOUDNESS_MB = 2000
+        const val MAX_STEREO_WIDTH = 200
+        const val MAX_BALANCE = 100
+        const val MAX_DRIVER_DELAY_TENTHS = StereoStage.MAX_DELAY_TENTHS
+        const val MAX_CROSSFEED = 100
+        const val DRIVER_LEFT = 0
+        const val DRIVER_RIGHT = 1
 
         @Volatile private var cached: AudioEffectSettings? = null
 
@@ -98,6 +147,17 @@ data class AudioEffectSettings(
                 autoLevel = prefs.getBoolean(KEY_AUTO_LEVEL, false),
                 autoLevelAmount = prefs.getInt(KEY_AUTO_LEVEL_AMOUNT, 50).coerceIn(0, 100),
                 parametric = ParametricBand.decodeList(prefs.getString(KEY_PARAMETRIC, "")),
+                stereoWidth = prefs.getInt(KEY_STEREO_WIDTH, 100).coerceIn(0, MAX_STEREO_WIDTH),
+                balance = prefs.getInt(KEY_BALANCE, 0).coerceIn(-MAX_BALANCE, MAX_BALANCE),
+                driverSeatDelayTenthsMs = prefs.getInt(KEY_DRIVER_DELAY, 0).coerceIn(0, MAX_DRIVER_DELAY_TENTHS),
+                driverSide = prefs.getInt(KEY_DRIVER_SIDE, DRIVER_LEFT).coerceIn(DRIVER_LEFT, DRIVER_RIGHT),
+                crossfeed = prefs.getInt(KEY_CROSSFEED, 0).coerceIn(0, MAX_CROSSFEED),
+                airDb = prefs.getInt(KEY_AIR_DB, 0).coerceIn(0, AirShelf.MAX_DB),
+                airHz = AirShelf.snapCorner(prefs.getInt(KEY_AIR_HZ, AirShelf.DEFAULT_HZ)),
+                deEss = prefs.getInt(KEY_DE_ESS, AirShelf.DEFAULT_DE_ESS).coerceIn(0, 100),
+                loudnessComp = prefs.getBoolean(KEY_LOUDNESS_COMP, false),
+                loudnessCompAmount = prefs.getInt(KEY_LOUDNESS_COMP_AMOUNT, 60).coerceIn(0, 100),
+                loudnessCompReferenceStep = prefs.getInt(KEY_LOUDNESS_COMP_REFERENCE, 0).coerceIn(0, MAX_VOLUME_STEP),
             ).also { cached = it; EqualizerDsp.headroom = it.headroomGain() }
         }
 
@@ -117,6 +177,17 @@ data class AudioEffectSettings(
                 .putBoolean(KEY_AUTO_LEVEL, settings.autoLevel)
                 .putInt(KEY_AUTO_LEVEL_AMOUNT, settings.autoLevelAmount)
                 .putString(KEY_PARAMETRIC, settings.parametric.joinToString(",") { it.encode() })
+                .putInt(KEY_STEREO_WIDTH, settings.stereoWidth.coerceIn(0, MAX_STEREO_WIDTH))
+                .putInt(KEY_BALANCE, settings.balance.coerceIn(-MAX_BALANCE, MAX_BALANCE))
+                .putInt(KEY_DRIVER_DELAY, settings.driverSeatDelayTenthsMs.coerceIn(0, MAX_DRIVER_DELAY_TENTHS))
+                .putInt(KEY_DRIVER_SIDE, settings.driverSide.coerceIn(DRIVER_LEFT, DRIVER_RIGHT))
+                .putInt(KEY_CROSSFEED, settings.crossfeed.coerceIn(0, MAX_CROSSFEED))
+                .putInt(KEY_AIR_DB, settings.airDb.coerceIn(0, AirShelf.MAX_DB))
+                .putInt(KEY_AIR_HZ, AirShelf.snapCorner(settings.airHz))
+                .putInt(KEY_DE_ESS, settings.deEss.coerceIn(0, 100))
+                .putBoolean(KEY_LOUDNESS_COMP, settings.loudnessComp)
+                .putInt(KEY_LOUDNESS_COMP_AMOUNT, settings.loudnessCompAmount.coerceIn(0, 100))
+                .putInt(KEY_LOUDNESS_COMP_REFERENCE, settings.loudnessCompReferenceStep.coerceIn(0, MAX_VOLUME_STEP))
                 .apply()
             cached = settings
             AudioEffectController.applyToActive(settings)

@@ -19,6 +19,18 @@ object SoundPresets {
         val autoLevel: Boolean = false,
         val autoLevelAmount: Int = 50,
         val limiter: Boolean = true,
+        /** Stereo stage; neutral by default (see [StereoStage]). The driver side stays the user's. */
+        val stereoWidth: Int = 100,
+        val balance: Int = 0,
+        val driverSeatDelayTenthsMs: Int = 0,
+        val crossfeed: Int = 0,
+        /** De-essed air shelf; 0 dB = off. */
+        val airDb: Int = 0,
+        val airHz: Int = AirShelf.DEFAULT_HZ,
+        val deEss: Int = AirShelf.DEFAULT_DE_ESS,
+        /** Volume-linked loudness compensation; neutral (off) unless a preset is meant for quiet listening. */
+        val loudnessComp: Boolean = false,
+        val loudnessCompAmount: Int = 60,
     ) {
         fun apply(settings: AudioEffectSettings): AudioEffectSettings = settings.copy(
             enabled = true,
@@ -31,9 +43,24 @@ object SoundPresets {
             autoLevel = autoLevel,
             autoLevelAmount = autoLevelAmount,
             limiter = limiter,
+            stereoWidth = stereoWidth,
+            balance = balance,
+            driverSeatDelayTenthsMs = driverSeatDelayTenthsMs,
+            crossfeed = crossfeed,
+            airDb = airDb,
+            airHz = airHz,
+            deEss = deEss,
+            loudnessComp = loudnessComp,
+            loudnessCompAmount = loudnessCompAmount,
             presetName = name,
         )
     }
+
+    /**
+     * Driver-seat alignment for the Yaris: the driver sits roughly 40 cm closer to the left door
+     * speaker than to the right one, i.e. about 1.2 ms earlier arrival from the left.
+     */
+    private const val YARIS_DRIVER_DELAY_TENTHS = 12
 
     /** Cabin correction shared by the Yaris presets: door boom, tweeter edge, dull top end. */
     private val YARIS_CORRECTION = listOf(
@@ -47,6 +74,9 @@ object SoundPresets {
             "Yaris · Rage", "Ken Carson / Nine / Vicious: 808s felt through harmonics, hi-hats forward, door boom tamed.",
             intArrayOf(-2, 4, 3, 0, -2, -1, 0, 1, 2, 3, 4, 3),
             parametric = YARIS_CORRECTION, subsonicHz = 35, bassEnhance = 70, bassEnhanceHz = 90, autoLevel = false,
+            driverSeatDelayTenthsMs = YARIS_DRIVER_DELAY_TENTHS,
+            airDb = 3, airHz = 10000, deEss = 60,
+            loudnessComp = true, loudnessCompAmount = 50,
         ),
         Preset(
             "Yaris · 808 Heavy", "Maximum low end the doors can take; the limiter keeps it from breaking up.",
@@ -57,11 +87,16 @@ object SoundPresets {
             "Yaris · Trap Clean", "Balanced trap mix: tight bass, clear vocals, no mud around 500 Hz.",
             intArrayOf(-2, 3, 2, 0, -2, 0, 0, 1, 1, 2, 3, 2),
             parametric = YARIS_CORRECTION, subsonicHz = 32, bassEnhance = 45, bassEnhanceHz = 90, autoLevel = true, autoLevelAmount = 40,
+            driverSeatDelayTenthsMs = YARIS_DRIVER_DELAY_TENTHS,
+            airDb = 3, airHz = 10000, deEss = 60,
+            loudnessComp = true, loudnessCompAmount = 50,
         ),
         Preset(
             "Yaris · Melodic / Vocals", "Destroy Lonely-style melodic rage: vocals and synth leads forward, bass still present.",
             intArrayOf(-2, 3, 1, 0, -1, 1, 2, 2, 1, 2, 2, 1),
             parametric = YARIS_CORRECTION, subsonicHz = 35, bassEnhance = 40, bassEnhanceHz = 90,
+            driverSeatDelayTenthsMs = YARIS_DRIVER_DELAY_TENTHS,
+            airDb = 2, deEss = 70,
         ),
         Preset(
             "Yaris · Flat Corrected", "Only the cabin correction: honest sound, nothing boosted.",
@@ -77,11 +112,13 @@ object SoundPresets {
             "Yaris · Windows Down", "Louder mids and highs so the music survives wind noise.",
             intArrayOf(-3, 2, 2, 1, 0, 1, 2, 3, 3, 3, 2, 1),
             parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 30, bassEnhanceHz = 110, autoLevel = true, autoLevelAmount = 50,
+            airDb = 3, airHz = 10000, deEss = 60,
         ),
         Preset(
             "Yaris · Night Drive", "Low volume, late: fuller bass and sparkle so it still sounds big when quiet.",
             intArrayOf(-2, 4, 3, 1, -1, -1, 0, 1, 1, 2, 3, 2),
             parametric = YARIS_CORRECTION, subsonicHz = 35, bassEnhance = 50, bassEnhanceHz = 90, autoLevel = true, autoLevelAmount = 60,
+            loudnessComp = true, loudnessCompAmount = 70,
         ),
         Preset(
             "Yaris · Podcast / Voice", "Speech clarity: no bass, presence lifted, strong auto level across different shows.",

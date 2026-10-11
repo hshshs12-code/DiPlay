@@ -93,11 +93,14 @@ object AudioPath {
                     .onFailure { log("audio path: volume watcher unavailable: ${it.message}") }
             }
         }
+        // Loudness compensation follows the media volume only when it is the knob (checked on every update).
+        runCatching { LoudnessVolumeTracker.start(app) }.onFailure { log("audio path: loudness tracker unavailable: ${it.message}") }
         log("audio path: ${describe(app)}")
     }
 
     fun onSessionEnd(context: Context) {
         val app = context.applicationContext
+        runCatching { LoudnessVolumeTracker.stop(app) }
         synchronized(this) {
             sessions = (sessions - 1).coerceAtLeast(0)
             if (sessions == 0) {

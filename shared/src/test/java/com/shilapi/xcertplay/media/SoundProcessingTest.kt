@@ -77,7 +77,9 @@ class SoundProcessingTest {
         val fundamental = magnitude(out, 50.0)
         val second = magnitude(out, 100.0)
         val third = magnitude(out, 150.0)
-        assertTrue("fundamental should remain, got $fundamental", fundamental > 0.2)
+        // The enhancer trims the sub band below its crossover (−3.8 dB at amount 80), so the 0.25
+        // fundamental reads about 0.17 rather than ~0.25.
+        assertTrue("fundamental should remain, got $fundamental", fundamental > 0.14)
         assertTrue("harmonics should appear (2nd=$second 3rd=$third)", second > 0.02 || third > 0.02)
     }
 
