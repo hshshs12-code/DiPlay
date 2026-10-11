@@ -6,16 +6,20 @@ session. Everything a factory USB-iPod head unit does, with a screen's worth of 
 
 ## Using it
 
-- Home screen → **iPod audio (USB)** → **Start**. Allow the USB prompt the first time. Keep the
-  phone unlocked for the first connection.
+- Home screen → **iPod audio** → **Open player** → **Start** (or just plug the phone in and pick
+  iPod audio on the chooser). Allow the USB prompt the first time; the screen tells you what it is
+  waiting for and starts by itself once access is granted. Keep the phone unlocked for the first
+  connection.
 - The status pill goes Connecting → Connected → "Connected · 44.1 kHz" once the phone starts
   streaming. Play anything on the phone: Music, Spotify, Podcasts, YouTube Music, a browser.
-- Controls: previous / play-pause / next, shuffle, repeat, a seekable scrubber, Siri, and
-  shortcuts that open Music, Podcasts, Spotify and YouTube Music on the phone. Steering-wheel keys
-  and Bluetooth remotes work through Android's media session.
-- The gear (⚙) opens the sheet: volume, +6 dB gain boost, the direct USB audio driver switch,
-  "start iPod audio on plug-in instead of CarPlay", the charging current announced to the phone,
-  Equalizer, "Request USB audio", "Switch to CarPlay", level meter and the last log lines.
+- Controls: previous / play-pause / next (80 and 96 dp), shuffle, repeat, a seekable scrubber in a
+  56 dp strip, and three big buttons: **Siri**, **Apps** (Music, Podcasts, Spotify, YouTube Music
+  on the phone) and **Sound**. Anything the phone refused (no HID, no seeking) is disabled, not
+  just dimmed. Steering-wheel keys and Bluetooth remotes work through Android's media session.
+- The gear (⚙) opens the sheet (with its own Close): volume, +6 dB gain boost, the direct USB
+  audio driver switch, what to do when the iPhone is plugged in (ask / CarPlay / iPod audio), the
+  charging current announced to the phone, Sound, "Request USB audio", "Switch to CarPlay", the
+  level meter and the audio path / underrun counters with the last log lines.
 - Playback continues in the background with a media notification (previous / play / next / stop).
 - The screen is edge to edge; swipe from the top edge to see the head unit's bar.
 

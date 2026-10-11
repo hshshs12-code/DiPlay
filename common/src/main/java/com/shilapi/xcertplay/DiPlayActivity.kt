@@ -81,6 +81,9 @@ class DiPlayActivity : ComponentActivity() {
     private var hotspotJoinControls: HotspotJoinControls? = null
     private var setupError: String? = null
     private var status: TextView? = null
+    /** Repaints the simple home's Now Playing strip and source cards from live state. */
+    private var updateSimpleHome: (() -> Unit)? = null
+    private val ipodListener: () -> Unit = { handler.post { updateSimpleHome?.invoke() } }
     private var connectButton: Button? = null
     private var disconnectButton: Button? = null
     private var lastRunning: Boolean? = null
@@ -244,9 +247,12 @@ class DiPlayActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         CenterMapOverlay.onDiPlayScreenShown()
+        IpodAudioEngine.listeners.add(ipodListener)
+        updateSimpleHome?.invoke()
     }
 
     override fun onStop() {
+        IpodAudioEngine.listeners.remove(ipodListener)
         cancelUsbPermissionSetup()
         clusterSafeAreaDialog?.dismiss()
         startupHotspotCancelled = true
@@ -315,6 +321,7 @@ class DiPlayActivity : ComponentActivity() {
         // A restore still waiting for layout keeps its target: the old page was never laid out.
         val previousScrollY = (pendingScrollY ?: rootScroll?.scrollY)?.takeIf { renderedPage == page }
         status = null; connectButton = null; disconnectButton = null; lastRunning = null; carButtonCard = null
+        updateSimpleHome = null
         bydAdbControls = null
         adbSwitches.clear()
         adbStatus = null
@@ -353,17 +360,19 @@ class DiPlayActivity : ComponentActivity() {
                 LinearLayout.LayoutParams(if (compact) dp(80) else dp(130), if (compact) dp(36) else dp(56)),
             )
         }
-        content.addView(header)
-        content.addView(space(if (compact) 8 else 24))
-        if (page == "eq") {
-            content.addView(label("Sound", 30, TEXT, true).apply { setPadding(0, 0, 0, dp(12)) })
-            section(content, "Equalizer and sound processing", R.drawable.ic_dp_audio) { card -> audioEffectsSection(card) }
-            content.addView(button("Back", false) { page = "home"; render() }, matchButton(12, 56))
-            setContentView(scroll)
-            renderedPage = page
-            return
+        // The simple home draws its own header (name, status pill, clock); every other page gets the common one.
+        if (page != "home" || !AirPlayPersistence.loadSimpleHome(this)) {
+            content.addView(header)
+            content.addView(space(if (compact) 8 else 24))
         }
         when (page) {
+            "eq" -> {
+                // One heading, no nested card title, and the common tail below restores the scroll position.
+                val card = card()
+                card.addView(label("Sound", 30, TEXT, true).apply { setPadding(0, 0, 0, dp(4)) })
+                audioEffectsSection(card)
+                content.addView(card, LinearLayout.LayoutParams(-1, -2))
+            }
             "connection" -> connectionSetup(content)
             "settings" -> settings(content)
             "about" -> about(content)
@@ -386,59 +395,127 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     // ---- Legacy fork: simple home screen ------------------------------------------------------
+    /**
+     * Two source cards (CarPlay, iPod audio), a live Now Playing strip and two doors (Sound,
+     * Settings), under one header with the status pill and a clock. Wireless, phone choice and
+     * disconnect live inside the CarPlay card; the update check is a small header action because
+     * the owner asked for it on the home screen.
+     */
     private fun simpleHome(content: LinearLayout) {
         val wide = resources.configuration.screenWidthDp >= 700
-        // Header: app name on the left, live status as a pill on the right (iPod-screen style).
-        val header = row().apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(14)) }
-        header.addView(label("DiPlay", 26, TEXT, true), LinearLayout.LayoutParams(0, -2, 1f))
-        status = label(getString(R.string.ready_when_you_are), 13, MUTED).apply {
-            background = GradientDrawable().apply { setColor(Color.argb(60, 255, 255, 255)); cornerRadius = dp(14).toFloat() }
-            setPadding(dp(12), dp(6), dp(12), dp(6)); maxLines = 2; gravity = Gravity.END
+        val header = row().apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(12)) }
+        header.addView(button("‹", false) { startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)) }.apply { contentDescription = getString(R.string.car_home); textSize = 26f },
+            LinearLayout.LayoutParams(dp(64), dp(64)).apply { rightMargin = dp(10) })
+        header.addView(label("DiPlay", 28, TEXT, true), LinearLayout.LayoutParams(-2, -2))
+        header.addView(label("Yaris", 18, MUTED).apply { setPadding(dp(12), dp(4), 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+        status = label(getString(R.string.ready_when_you_are), 15, TEXT).apply {
+            background = GradientDrawable().apply { setColor(Color.argb(40, 255, 255, 255)); cornerRadius = dp(18).toFloat(); setStroke(dp(1), BORDER) }
+            setPadding(dp(14), dp(8), dp(14), dp(8)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.CENTER
         }
-        header.addView(status, LinearLayout.LayoutParams(0, -2, 1.2f))
+        header.addView(status, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) })
+        header.addView(button("Update", false) { homeUpdateCheck() }.apply { textSize = 15f; contentDescription = "Check for updates" },
+            LinearLayout.LayoutParams(dp(96), dp(56)).apply { rightMargin = dp(10) })
+        header.addView(android.widget.TextClock(this).apply {
+            format12Hour = "h:mm"; format24Hour = "HH:mm"; textSize = 26f; setTextColor(TEXT); gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }, LinearLayout.LayoutParams(dp(84), dp(64)))
         content.addView(header)
-        setupError?.let { content.addView(label(it, 14, WARNING).apply { setPadding(0, 0, 0, dp(8)) }) }
-        fun tile(title: String, subtitle: String, primary: Boolean, click: () -> Unit): View {
-            val holder = column().apply {
-                background = rounded(if (primary) TEXT else Color.argb(32, 255, 255, 255), if (primary) TEXT else BORDER)
-                setPadding(dp(18), dp(16), dp(18), dp(16))
-                isClickable = true; isFocusable = true
-                setOnClickListener { click() }
+        setupError?.let { content.addView(label(it, 15, WARNING).apply { setPadding(0, 0, 0, dp(8)) }) }
+
+        // Source cards.
+        fun sourceCard(title: String, subtitle: String, glyph: View, action: Button, secondary: View? = null): LinearLayout = column().apply {
+            background = rounded(Color.argb(28, 255, 255, 255), BORDER)
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            val top = row().apply { gravity = Gravity.CENTER_VERTICAL }
+            top.addView(glyph, LinearLayout.LayoutParams(dp(64), dp(64)).apply { rightMargin = dp(14) })
+            val text = column()
+            text.addView(label(title, 28, TEXT, true))
+            text.addView(label(subtitle, 16, MUTED))
+            top.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(top)
+            addView(action, matchButton(10, 64))
+            if (secondary != null) addView(secondary, matchButton(8, 56))
+        }
+        val carPlayGlyph = ImageView(this).apply { setImageResource(R.drawable.ic_carplay); scaleType = ImageView.ScaleType.FIT_CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        val ipodGlyph = label("♪", 40, TEXT, true).apply { gravity = Gravity.CENTER; background = rounded(Color.argb(28, 255, 255, 255), BORDER); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        val wired = button(getString(R.string.connect_with_usb), true) {
+            if (CarPlayBackgroundSession.hasSession()) openProjection() else connect(false)
+        }
+        connectButton = wired
+        val wireless = button("Connect wireless", false) { if (CarPlayBackgroundSession.hasSession()) openProjection() else connect(true) }
+        disconnectButton = button(getString(R.string.disconnect), false) {
+            disconnectButton?.isEnabled = false
+            CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus() } }
+        }.apply { visibility = View.GONE }
+        val carPlayExtras = column().apply { addView(wireless, matchButton(0, 56)); addView(disconnectButton, matchButton(0, 56)) }
+        val carPlayCard = sourceCard("CarPlay", "Maps, calls and music", carPlayGlyph, wired, carPlayExtras)
+        val ipodCard = sourceCard("iPod audio", "Music over USB", ipodGlyph, button("Open player", false) { openIpodMode() })
+        if (wide) {
+            val sources = row()
+            sources.addView(carPlayCard, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(12) })
+            sources.addView(ipodCard, LinearLayout.LayoutParams(0, -1, 1f))
+            content.addView(sources)
+        } else {
+            content.addView(carPlayCard, LinearLayout.LayoutParams(-1, -2))
+            content.addView(space(12))
+            content.addView(ipodCard, LinearLayout.LayoutParams(-1, -2))
+        }
+        content.addView(space(12))
+
+        // Now Playing strip: iPod audio's live metadata and transport (never CarPlay's; CarPlay owns its own).
+        val now = row().apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(10), dp(6), dp(10), dp(6))
+            background = rounded(Color.argb(28, 255, 255, 255), BORDER)
+        }
+        val art = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP; setImageResource(R.drawable.art_now_playing_placeholder)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) { outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat()) }
             }
-            holder.addView(label(title, 22, if (primary) BG else TEXT, true))
-            holder.addView(label(subtitle, 13, if (primary) Color.rgb(60, 66, 80) else MUTED).apply { setPadding(0, dp(4), 0, 0) })
-            return holder
+            clipToOutline = true
         }
-        val tiles = mutableListOf<View>()
-        val sessionActive = CarPlayBackgroundSession.hasSession()
-        tiles += tile(if (sessionActive) "Open CarPlay" else "Connect USB", if (sessionActive) "Session running" else "Plug the iPhone in first", true) {
-            if (sessionActive) openProjection() else connect(false)
+        now.addView(art, LinearLayout.LayoutParams(dp(64), dp(64)).apply { rightMargin = dp(12) })
+        val trackTitle = label("Connect an iPhone", 22, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        val trackDetail = label("Open iPod audio to play music", 16, MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        val metadata = column().apply {
+            gravity = Gravity.CENTER_VERTICAL; isClickable = true; isFocusable = true
+            addView(trackTitle); addView(trackDetail)
+            setOnClickListener { openIpodMode() }
         }
-        tiles += tile("Connect wireless", when (AirPlayPersistence.loadWirelessHotspotMode(this)) {
-            WirelessHotspotMode.EXISTING_WIFI -> "Same Wi-Fi / LAN"
-            WirelessHotspotMode.MANUAL -> "Car hotspot"
-            else -> "Wi-Fi Direct"
-        }, false) { if (sessionActive) openProjection() else connect(true) }
-        tiles += tile(if (IpodAudioEngine.isRunning()) "iPod audio ▶" else "iPod audio (USB)", if (IpodAudioEngine.isRunning()) "Playing · tap to control" else "Music without CarPlay", false) { openIpodMode() }
-        tiles += tile("Choose iPhone", "Wireless: ${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }
-        tiles += tile("Equalizer", "EQ, bass boost, loudness", false) { page = "eq"; render() }
-        tiles += tile("Update", "Check GitHub for a new build", false) { homeUpdateCheck() }
-        tiles += tile("Settings", "Display, audio, USB", false) { page = "settings"; render() }
-        if (sessionActive) tiles += tile("Disconnect", "End the CarPlay session", false) {
-            CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus(); render() } }
-        }
-        val columns = if (wide) 3 else 2
-        var rowView: LinearLayout? = null
-        tiles.forEachIndexed { index, tile ->
-            if (index % columns == 0) {
-                rowView = row().apply { setPadding(0, 0, 0, dp(10)) }
-                content.addView(rowView)
+        now.addView(metadata, LinearLayout.LayoutParams(0, dp(80), 1f))
+        val pause = button("▶", false) { IpodAudioEngine.playPause() }.apply { textSize = 24f }
+        val next = button("⏭", false) { IpodAudioEngine.next() }.apply { textSize = 24f; contentDescription = "Next track" }
+        now.addView(pause, LinearLayout.LayoutParams(dp(80), dp(80)).apply { leftMargin = dp(8); rightMargin = dp(8) })
+        now.addView(next, LinearLayout.LayoutParams(dp(80), dp(80)))
+        content.addView(now, LinearLayout.LayoutParams(-1, dp(92)))
+        content.addView(space(12))
+
+        val doors = row()
+        doors.addView(button("Sound  ›", false) { page = "eq"; render() }, LinearLayout.LayoutParams(0, dp(64), 1f).apply { rightMargin = dp(12) })
+        doors.addView(button("${getString(R.string.settings)}  ›", false) { page = "settings"; render() }, LinearLayout.LayoutParams(0, dp(64), 1f))
+        content.addView(doors)
+        content.addView(label("${getString(R.string.home_public_preview)}${version()} · 3-finger swipe down in CarPlay opens live settings", 12, MUTED).apply { setPadding(0, dp(8), 0, 0) })
+
+        var shownArt: Any? = null
+        updateSimpleHome = {
+            val ready = IpodAudioEngine.state == IpodAudioEngine.State.READY
+            val info = IpodAudioEngine.nowPlaying
+            trackTitle.text = if (ready) info.title ?: "Nothing playing" else "Connect an iPhone"
+            trackDetail.text = if (ready) listOfNotNull(info.artist, info.sourceApp).joinToString(" · ").ifEmpty { if (IpodAudioEngine.audioActive) "USB audio ready" else "Open the player" }
+                else if (IpodAudioEngine.isRunning()) "iPod audio connecting…" else "Open iPod audio to play music"
+            metadata.contentDescription = "Open player. ${trackTitle.text}. ${trackDetail.text}"
+            val controlsAvailable = ready && IpodAudioEngine.capabilities.hid
+            listOf(pause, next).forEach { it.isEnabled = controlsAvailable; it.alpha = if (controlsAvailable) 1f else 0.38f }
+            pause.text = if (IpodAudioEngine.playing) "⏸" else "▶"
+            pause.contentDescription = if (IpodAudioEngine.playing) "Pause" else "Play"
+            val nextArt = if (ready) IpodAudioEngine.artwork else null
+            if (shownArt !== nextArt) {
+                shownArt = nextArt
+                if (nextArt == null) art.setImageResource(R.drawable.art_now_playing_placeholder) else art.setImageBitmap(nextArt)
             }
-            rowView!!.addView(tile, LinearLayout.LayoutParams(0, dp(104), 1f).apply { if (index % columns != columns - 1) rightMargin = dp(10) })
         }
-        val remainder = tiles.size % columns
-        if (remainder != 0) repeat(columns - remainder) { rowView!!.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f).apply { rightMargin = dp(10) }) }
-        content.addView(label("${getString(R.string.home_public_preview)}${version()} · 3-finger swipe down in CarPlay opens live settings", 12, MUTED).apply { setPadding(0, dp(6), 0, 0) })
+        updateSimpleHome?.invoke()
     }
 
     private fun home(content: LinearLayout) {
@@ -454,7 +531,7 @@ class DiPlayActivity : ComponentActivity() {
                 if (CarPlayBackgroundSession.hasSession()) openProjection()
                 else connect(true)
             }
-            card.addView(connectButton, matchButton(0, 44))
+            card.addView(connectButton, matchButton(0, 56))
 
             val buttonRow = row().apply {
                 setPadding(0, dp(8), 0, 0)
@@ -462,18 +539,18 @@ class DiPlayActivity : ComponentActivity() {
             }
             val usbBtn = button(getString(R.string.connect_with_usb), false) { connect(false) }
             val settingsBtn = button(getString(R.string.settings), false) { page = "settings"; render() }
-            buttonRow.addView(usbBtn, LinearLayout.LayoutParams(0, dp(38), 1f))
+            buttonRow.addView(usbBtn, LinearLayout.LayoutParams(0, dp(56), 1f))
             buttonRow.addView(space(8), LinearLayout.LayoutParams(dp(8), 1))
-            buttonRow.addView(button("iPod audio", false) { openIpodMode() }, LinearLayout.LayoutParams(0, dp(38), 1f))
+            buttonRow.addView(button("iPod audio", false) { openIpodMode() }, LinearLayout.LayoutParams(0, dp(56), 1f))
             buttonRow.addView(space(8), LinearLayout.LayoutParams(dp(8), 1))
-            buttonRow.addView(settingsBtn, LinearLayout.LayoutParams(0, dp(38), 1f))
+            buttonRow.addView(settingsBtn, LinearLayout.LayoutParams(0, dp(56), 1f))
             card.addView(buttonRow)
 
             disconnectButton = button(getString(R.string.disconnect), false) {
                 disconnectButton?.isEnabled = false
                 CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus() } }
             }.apply { visibility = View.GONE }
-            card.addView(disconnectButton, matchButton(8, 38))
+            card.addView(disconnectButton, matchButton(8, 56))
 
             content.addView(card)
             setupError?.let { content.addView(label(it, 13, WARNING).apply { setPadding(0, dp(6), 0, 0) }) }
@@ -643,9 +720,12 @@ class DiPlayActivity : ComponentActivity() {
         }
         bydAdbSettings(content)
         section(content, "Home screen and launch", R.drawable.ic_dp_automation) { card ->
-            toggle(card, "Simple home screen", "Big tiles: Connect USB, Connect wireless, Choose iPhone, Equalizer, Settings.", AirPlayPersistence.loadSimpleHome(this)) {
+            toggle(card, "Simple home screen", "Two source cards (CarPlay, iPod audio), a Now Playing strip, Sound and Settings.", AirPlayPersistence.loadSimpleHome(this)) {
                 AirPlayPersistence.saveSimpleHome(this, it)
             }
+            val plugValues = listOf(IpodSettings.CHOICE_ASK, IpodSettings.CHOICE_CARPLAY, IpodSettings.CHOICE_IPOD)
+            choice(card, "When the iPhone is plugged in", listOf("Ask me", "CarPlay", "iPod audio"),
+                plugValues.indexOf(IpodSettings.plugInChoice(this)).coerceAtLeast(0), reconnects = false) { IpodSettings.savePlugInChoice(this, plugValues[it]) }
             toggle(card, "Auto-launch on USB plug-in", "When Android hands the iPhone to DiPlay (pick DiPlay with \"Use by default\" once), CarPlay starts immediately, even with the app closed.", AirPlayPersistence.loadUsbAutoLaunch(this)) {
                 AirPlayPersistence.saveUsbAutoLaunch(this, it)
             }
@@ -753,7 +833,7 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(label("Takes the remaining processing away from Android: no mixer resampling, no early rounding, software volume at unity, vendor sound effects off. Each switch is independent; turn one off if it misbehaves.", 13, MUTED).apply { setPadding(0, 0, 0, dp(4)) })
             sub("Output at the hardware sample rate", "Opens the music track at the hardware's own rate (${AudioPath.nativeSampleRate(this).takeIf { it > 0 } ?: "unknown"} Hz here) and resamples in DiPlay with a windowed-sinc converter, so Android's mixer does not resample.", "native_rate_output") { AirPlayPersistence.saveNativeRateOutput(this, it) }
             sub("Float output to Android's mixer", "Hands Android 32-bit float samples; the first rounding to integer happens in the audio driver, not in DiPlay.", "float_output") { AirPlayPersistence.saveFloatOutput(this, it) }
-            sub("Keep Android media volume at maximum", "Only once the knob is known to drive the amplifier chip: Android's software volume then sits at 100 % so the mixer multiplies by 1. Does nothing while the knob type is unknown or software.", "pin_media_volume", reconnect = false) { AirPlayPersistence.savePinMediaVolume(this, it) }
+            sub("Keep Android media volume at maximum", "Only after you set \"Knob is hardware\" below (DiPlay no longer guesses it from silence): Android's software volume then sits at 100 % so the mixer multiplies by 1. Does nothing while the knob type is unknown or software.", "pin_media_volume", reconnect = false) { AirPlayPersistence.savePinMediaVolume(this, it) }
             sub("Disable MediaTek sound enhancements", "Switches off BesLoudness / BesSurround / MusicPlus through the vendor audio interface at session start, when the firmware has them.", "disable_vendor_fx", reconnect = false) { AirPlayPersistence.saveDisableVendorEnhancements(this, it) }
             val pathReadout = label(AudioPath.describe(this), 13, MUTED).apply { setPadding(0, dp(6), 0, dp(6)) }
             card.addView(pathReadout)
@@ -761,11 +841,11 @@ class DiPlayActivity : ComponentActivity() {
             fun knobButton(title: String, knob: AudioPath.Knob?, evidence: String) = button(title, false) {
                 AudioPath.setKnob(this, knob, evidence); pathReadout.text = AudioPath.describe(this)
             }
-            knobRow.addView(knobButton("Knob: auto-detect", null, ""), LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
-            knobRow.addView(knobButton("Knob is hardware", AudioPath.Knob.HARDWARE, "Set by you: the knob does not move Android's volume slider."), LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
-            knobRow.addView(knobButton("Knob is software", AudioPath.Knob.SOFTWARE, "Set by you: the knob moves Android's volume slider."), LinearLayout.LayoutParams(0, dp(44), 1f))
+            knobRow.addView(knobButton("Knob: auto-detect", null, ""), LinearLayout.LayoutParams(0, dp(56), 1f).apply { rightMargin = dp(6) })
+            knobRow.addView(knobButton("Knob is hardware", AudioPath.Knob.HARDWARE, "Set by you: the knob does not move Android's volume slider."), LinearLayout.LayoutParams(0, dp(56), 1f).apply { rightMargin = dp(6) })
+            knobRow.addView(knobButton("Knob is software", AudioPath.Knob.SOFTWARE, "Set by you: the knob moves Android's volume slider."), LinearLayout.LayoutParams(0, dp(56), 1f))
             card.addView(knobRow)
-            card.addView(label("Tell DiPlay about the knob if auto-detect has not decided: turn the knob while music plays; if the on-screen Android volume bar moves, it is software.", 12, MUTED).apply { setPadding(0, dp(4), 0, dp(8)) })
+            card.addView(label("Auto-detect only ever concludes \"software\" (a volume change DiPlay did not make). If the on-screen Android volume bar does not move when you turn the knob, set \"Knob is hardware\" yourself.", 13, MUTED).apply { setPadding(0, dp(4), 0, dp(8)) })
             sub("Low-latency video", "MediaTek low-latency, no-reorder and motion-interpolation-off decoder keys on a fallback ladder, plus newest-frame catch-up after stalls.", "low_latency_video") { AirPlayPersistence.saveLowLatencyVideo(this, it) }
             sub("SurfaceView output", "Draws video straight to the screen, skipping a compositing step. Picture adjustments unavailable while on.", "surfaceview_output") { AirPlayPersistence.saveSurfaceViewOutput(this, it) }
             sub("Video feed wait", "When the decoder falls behind, wait up to 1 s for it instead of discarding frames (which smears the picture until the next keyframe).", "video_feed_wait") { AirPlayPersistence.saveFeedWait(this, it) }
@@ -3226,6 +3306,7 @@ class DiPlayActivity : ComponentActivity() {
             lastRunning = running
         }
         connectButton?.isEnabled = setupError == null
+        updateSimpleHome?.invoke()
     }
     private fun authorizeClusterRouting() {
         val app = applicationContext
@@ -3802,6 +3883,11 @@ class DiPlayActivity : ComponentActivity() {
             enabled = enabled,
             onChanged = save,
         )
+        // The whole row is the target, not the small switch inside it.
+        result.rowView.minimumHeight = dp(64)
+        result.switch.minimumHeight = dp(56); result.switch.minimumWidth = dp(56)
+        result.rowView.isClickable = enabled; result.rowView.isFocusable = enabled
+        result.rowView.setOnClickListener { if (result.switch.isEnabled) result.switch.performClick() }
         parent.addView(result.rowView)
         return result.switch
     }
@@ -3843,7 +3929,8 @@ class DiPlayActivity : ComponentActivity() {
         setOnClickListener { click() }
     }
     private fun rounded(color: Int, stroke: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(22).toFloat(); setStroke(dp(1), stroke) }
-    private fun matchButton(top: Int = 0, height: Int = 68) = LinearLayout.LayoutParams(-1, dp(height)).apply { topMargin = dp(top) }
+    /** Full-width button params; 56 dp is the floor for a glove-sized target on the resistive panel. */
+    private fun matchButton(top: Int = 0, height: Int = 68) = LinearLayout.LayoutParams(-1, dp(height.coerceAtLeast(56))).apply { topMargin = dp(top) }
     private fun space(height: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
     // Rounded, not truncated: below 160 dpi dp(1) became 0 and every border vanished.
     private fun dp(value: Int) = (value * resources.displayMetrics.density).roundToInt()

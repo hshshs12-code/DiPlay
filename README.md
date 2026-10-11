@@ -28,12 +28,15 @@ head unit" does, built and tested on an `alps 9212A` (ac8227l, Android 8.1, 1 GB
 - **Sound processing** on CarPlay music and iPod mode alike: 12-band constant-Q graphic EQ with
   analog-matched bells, 5 parametric bands, subsonic filter, MaxxBass-style bass enhancer,
   K-weighted program leveler, true-peak limiter, de-essed air shelf, volume-linked loudness
-  compensation, stereo width / balance / driver-seat delay / crossfeed, plus eleven presets tuned
-  for a 2018 Toyota Yaris with stock door speakers. See
+  compensation, stereo width / balance / driver-seat delay / crossfeed, plus fourteen presets tuned
+  for a 2018 Toyota Yaris with stock door speakers (eleven originals and three audit retunes). The
+  chain was externally audited in October 2026 and its findings are fixed and kept as regression
+  tests. See
   [docs/SOUND_PROCESSING.md](docs/SOUND_PROCESSING.md).
 - **DiPlay as the sound card**: music opens at the hardware rate in float with DiPlay's own
   windowed-sinc resampler, MediaTek BesLoudness/BesSurround/MusicPlus are switched off, and the
-  volume-knob type (hardware vs Android software volume) is auto-detected.
+  volume-knob type (hardware vs Android software volume) is detected when the knob moves Android's
+  volume, and set by hand otherwise.
 - **Head-unit practicalities**: in-app updater from this repository's releases, one-tap diagnostic
   upload, USB-competitor killer and default-handler shortcut, plug-in auto-launch (CarPlay or iPod
   mode), simple home screen, cold-start warm-up and baseline profile, touch-friendly settings.
@@ -45,8 +48,9 @@ head unit" does, built and tested on an `alps 9212A` (ac8227l, Android 8.1, 1 GB
    Update button on the home screen.
 2. Plug the iPhone in with a data cable. When Android asks which app should handle the device,
    pick DiPlay and tick "Use by default".
-3. Home screen: **Connect USB** for CarPlay, **iPod audio (USB)** for music without CarPlay,
-   **Equalizer** for sound, **Update** for new builds.
+3. Home screen: the **CarPlay** card (Connect USB, wireless underneath), the **iPod audio** card
+   (Open player), a Now Playing strip, then **Sound** and **Settings**; **Update** sits in the
+   header. Plugging the iPhone in asks CarPlay or iPod audio unless you told it to remember.
 
 If something fails, Settings → Diagnostics → **Upload diagnostic report** gives a link to a
 redacted log (no payloads, no credentials). The previous APK is always on the releases page.

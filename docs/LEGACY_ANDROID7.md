@@ -39,7 +39,53 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.37)
+## Fork features (0.2.13-legacy24.38)
+
+24.38: external DSP audit fixes, audit presets, Sound overview, two-card home, bigger targets
+- DSP, from the October 2026 external audit (every finding reproduced on the real code first,
+  regression fixtures in `DspAuditTest`):
+  - `TruePeakLimiter`: 64-tap detector kernel (was 12) and a 0.975 ceiling; random ±0.98 sign
+    bursts that used to leave at +1.7 dBTP now stay under 0.99 by a 16×/96-tap reference, also
+    after the output resampler. Switching the limiter on or off crossfades over 10 ms instead of
+    resetting (no silence gap, no 2 ms jump).
+  - `EqualizerDsp`: `configure` designs coefficients on the caller's thread and publishes one
+    immutable `Prepared` snapshot; the audio thread adopts it at a block boundary and alone
+    touches state, ramps and resets. Ramps advance on a persistent 64-frame grid counted in
+    processed audio, so a +12 dB step sounds identical in 1-frame and 4096-frame writes (it was
+    0.5 ms vs 32 ms before). The bass enhancer now forces the limiter (its all-pass dry path
+    can exceed full scale, which its harmonic guard never bounded). Graphic interaction keeps
+    its last correction pass instead of discarding it.
+  - `AirShelf`: atomic configuration pickup; per-channel sibilance detector linked by the louder
+    channel, so out-of-phase hats are de-essed like centred ones.
+  - `StereoStage.boostDb`: width bound is w, not (1+w)/2 (anti-phase input doubles at width
+    200); `headroomGain` composes serial boosts (still unused by the renderers).
+  - `AirShelf`, `StereoStage`, `LoudnessCompensator`: subnormal flush every 1024 frames.
+  - `SincResampler.supports`: only 32/44.1/48 → 44.1/48 kHz use DiPlay's resampler; other
+    hardware rates leave the track at the stream rate (48→16 kHz measured −18 dB alias rejection).
+  - `AudioPath`: ten quiet minutes no longer promote the knob to HARDWARE (that let the next
+    session pin a software-volume unit to maximum); an earlier automatic verdict is discarded and
+    the settings page explains the manual buttons. Automatic detection only ever concludes
+    SOFTWARE.
+- Presets: three "(Audit)" variants next to the originals (Rage, 808 Heavy, Podcast) with the
+  audit's gentler correction and lighter lifts, for A/B listening; preset descriptions no longer
+  promise speaker protection or "untouched" sub-bass.
+- UI, from the audit's review plus its four mockups:
+  - Sound page opens on an overview: four favourite presets, Bass character and Auto level
+    cards, a limiter/driver-side/Custom status line, All presets and Advanced. Parametric band
+    type is picked from a list; Reset offers Undo; every target ≥ 64 dp; EQ graph locks the
+    touched column for the whole slide.
+  - Simple home: one header (car-home glyph, DiPlay, status pill, Update, clock), two source
+    cards (CarPlay with wireless/disconnect inside, iPod audio), a live Now Playing strip with
+    play/next, then Sound and Settings. The "eq" page goes through the common render tail again
+    (scroll position restored, single Back).
+  - iPod screen: 64 dp back/gear/seek, 80 dp previous/next, 96 dp play, three equal Siri / Apps /
+    Sound buttons (apps in a dialog grid), controls the phone refused are disabled not just
+    dimmed, a persistent recovery line for USB permission / failures (with a permission-result
+    receiver that starts the engine once granted), 1 s refresh with meters/log only while the
+    sheet is open, sheet with an explicit Close and 64 dp rows.
+  - Plug-in chooser: whole-row Remember, 64 dp Not now, first-tap lock on both cards, state kept
+    across recreation; "When the iPhone is plugged in" added to Settings → Home screen and launch.
+  - Switch rows everywhere are 64 dp and the whole row toggles them.
 
 24.37: plug-in chooser
 - `PlugInChooserActivity`: on a USB plug-in from anywhere, a fullscreen screen in the iPod
