@@ -1,11 +1,13 @@
 package com.shilapi.xcertplay.media
 
 import java.util.Collections
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.log10
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
@@ -23,15 +25,23 @@ import kotlin.math.tan
  * Design notes, in the spirit of a car-audio DSP rather than a phone app:
  * - All filtering runs in double precision; the signal is quantised once, at the output, with
  *   triangular dither. Direct-form-I biquads in single precision lose low-frequency accuracy at
- *   31 Hz / 48 kHz; double costs nothing extra on this CPU.
+ *   31 Hz / 48 kHz. (Cortex-A7 has scalar double-precision VFP; the recursive filters stay double
+ *   for accuracy, the float FIR paths are the first candidates for NEON if profiling ever asks.)
  * - Peaking filters use Orfanidis' design with prescribed Nyquist gain, so bells near 16 kHz keep
  *   their analog shape instead of being squashed against Nyquist by the bilinear transform.
  * - The graphic equalizer is constant-Q per band spacing and its band gains are corrected for
  *   neighbour interaction, so +6 dB on adjacent sliders produces +6 dB, not +9.
- * - Coefficient changes are interpolated over ~30 ms so slider drags never click.
+ * - Coefficient changes are interpolated over ~30 ms so slider drags never click. The ramp
+ *   advances on a fixed 64-frame grid counted in processed audio, so it lasts the same 30 ms
+ *   whether the stream arrives in 1-frame or 4096-frame writes.
  * - The limiter ([TruePeakLimiter]) is a stereo-linked true-peak look-ahead limiter (2 ms): 4x
  *   oversampled peak detection, a smooth gain envelope, hold plus dual release so bass is not
- *   modulated, instead of a static waveshaper that distorts whenever it works.
+ *   modulated, instead of a static waveshaper that distorts whenever it works. It fades in and
+ *   out instead of resetting, so toggling it mid-song neither gaps nor jumps.
+ * - Threading: [configure] designs every coefficient on the caller's thread and publishes one
+ *   immutable [Prepared] snapshot; the audio thread adopts it at the next block boundary and is
+ *   the only thread that touches filter state, ramps, resets and the stages' own configuration.
+ *   A block can never mix two generations of settings.
  * Neutral stages are skipped, so the cost scales with what is switched on.
  */
 class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
@@ -73,6 +83,21 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         fun clear() { state.fill(0.0) }
     }
 
+    /** One complete chain configuration: designed off the audio thread, adopted whole by [adopt]. */
+    private class Prepared(
+        val graphicDesign: DoubleArray, val graphicActive: BooleanArray,
+        val parametricDesign: DoubleArray, val parametricActive: BooleanArray,
+        val subsonicDesign: DoubleArray, val subsonicActive: Boolean,
+        val bassAmount: Int, val bassHz: Int,
+        val autoLevel: Boolean, val autoStrength: Double,
+        val width: Int, val balance: Int, val delayTenths: Int, val driverSide: Int, val crossfeed: Int,
+        val airDb: Int, val airHz: Int, val deEss: Int,
+        val loudness: Boolean, val loudnessAmount: Int,
+        val limiter: Boolean,
+    )
+
+    private val pending = AtomicReference<Prepared?>(null)
+
     private val graphic = Bank(BANDS)
     private val parametric = Bank(MAX_PARAMETRIC)
     private val subsonic = Bank(2)
@@ -87,19 +112,25 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     // Stereo stage (stereo streams only)
     private val stage: StereoStage? = if (channels == 2) StereoStage(sampleRate) else null
 
-    // Auto level: gated, K-weighted program leveler (see Leveler)
-    @Volatile private var autoOn = false
+    // Auto level: gated, K-weighted program leveler (see Leveler). [autoPolicy] is the configured
+    // state (any thread), [autoOn] the adopted one (audio thread).
+    @Volatile private var autoPolicy = false
+    private var autoOn = false
     private val leveler = Leveler(sampleRate, channels)
 
-    // Look-ahead limiter
+    // Look-ahead limiter. [limiter] is the configured policy (what the chain is heading for, readable
+    // from any thread); [limiterOn] is the adopted state on the audio thread.
     @Volatile var limiter = false
         private set
+    private var limiterOn = false
     @Volatile private var softClipForced = false
     private val truePeak = TruePeakLimiter(sampleRate, channels)
     private var scratch = DoubleArray(0)
 
-    // Coefficient smoothing and dither
-    private var smoothChunks = 0
+    // Coefficient smoothing (on a persistent 64-frame grid) and dither
+    private val rampSteps = max(1, Math.round(RAMP_SECONDS * sampleRate / SMOOTH_CHUNK_FRAMES).toInt())
+    private var smoothSteps = 0
+    private var stepPhase = 0
     private var denormalCounter = 0
     private var ditherState = 0x9E3779B9.toInt()
     private var floatOut: FloatArray? = null
@@ -109,67 +140,83 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
 
     /** Graphic-only configuration kept for callers and tests; all other stages switch off. */
     fun configure(gainsDb: FloatArray, limiter: Boolean) {
-        configureGraphic(gainsDb)
-        configureParametric(emptyList())
-        configureSubsonic(0)
-        configureBass(0, 100)
-        configureAutoLevel(false, 0)
-        stage?.configure(100, 0, 0, 0, 0)
-        air.configure(0, AirShelf.DEFAULT_HZ, 0, immediate = !configured)
-        loudness.configure(false, 0)
-        setLimiter(limiter)
-        finishConfigure()
+        this.limiter = limiter
+        autoPolicy = false
+        val (gDesign, gActive) = designGraphic(gainsDb)
+        val (pDesign, pActive) = designParametric(emptyList())
+        val (sDesign, sActive) = designSubsonic(0)
+        pending.set(Prepared(gDesign, gActive, pDesign, pActive, sDesign, sActive,
+            0, 100, false, 0.0, 100, 0, 0, 0, 0, 0, AirShelf.DEFAULT_HZ, 0, false, 0, limiter))
     }
 
     /** Full configuration from the user's settings; [softClip] forces the limiter on (media soft clipper). */
     fun configure(settings: AudioEffectSettings, softClip: Boolean) {
         softClipForced = softClip
         val active = settings.enabled && settings.dspMode
-        configureGraphic(if (active) settings.dspGainsDb() else FloatArray(BANDS))
-        configureParametric(if (active) settings.parametric else emptyList())
-        configureSubsonic(if (active) settings.subsonicHz else 0)
-        configureBass(if (active) settings.bassEnhance else 0, settings.bassEnhanceHz)
-        configureAutoLevel(active && settings.autoLevel, settings.autoLevelAmount)
-        if (active) {
-            stage?.configure(settings.stereoWidth, settings.balance, settings.driverSeatDelayTenthsMs, settings.driverSide, settings.crossfeed)
-        } else {
-            stage?.configure(100, 0, 0, settings.driverSide, 0)
-        }
-        air.configure(if (active) settings.airDb else 0, settings.airHz, settings.deEss, immediate = !configured)
         val loud = active && settings.loudnessComp
-        loudness.configure(loud, settings.loudnessCompAmount)
-        // Loudness compensation lifts bass by up to 15 dB at low volume: keep the limiter in front of the DAC.
-        setLimiter(softClip || (active && (settings.limiter || settings.autoLevel || loud)))
-        finishConfigure()
+        // Loudness compensation lifts bass by up to 15 dB at low volume and the bass enhancer adds
+        // harmonics on top of a dry path that an all-pass can push past full scale: both need the
+        // limiter in front of the DAC, as does auto level.
+        val useLimiter = softClip || (active && (settings.limiter || settings.autoLevel || loud || settings.bassEnhance > 0))
+        this.limiter = useLimiter
+        val auto = active && settings.autoLevel && settings.autoLevelAmount > 0
+        if (auto && !autoPolicy) leveler.reset()   // queued: the audio thread performs it
+        autoPolicy = auto
+        val (gDesign, gActive) = designGraphic(if (active) settings.dspGainsDb() else FloatArray(BANDS))
+        val (pDesign, pActive) = designParametric(if (active) settings.parametric else emptyList())
+        val (sDesign, sActive) = designSubsonic(if (active) settings.subsonicHz else 0)
+        pending.set(Prepared(
+            gDesign, gActive, pDesign, pActive, sDesign, sActive,
+            if (active) settings.bassEnhance else 0, settings.bassEnhanceHz,
+            active && settings.autoLevel, settings.autoLevelAmount.coerceIn(0, 100) / 100.0,
+            if (active) settings.stereoWidth else 100, if (active) settings.balance else 0,
+            if (active) settings.driverSeatDelayTenthsMs else 0, settings.driverSide, if (active) settings.crossfeed else 0,
+            if (active) settings.airDb else 0, settings.airHz, settings.deEss,
+            loud, settings.loudnessCompAmount,
+            useLimiter,
+        ))
     }
 
-    private fun finishConfigure() {
-        if (!configured) {
+    /** Audio thread: makes [p] the running configuration at a block boundary. */
+    private fun adopt(p: Prepared) {
+        val first = !configured
+        graphic.commit(p.graphicDesign, p.graphicActive)
+        parametric.commit(p.parametricDesign, p.parametricActive)
+        subsonic.commit(p.subsonicDesign, BooleanArray(2) { p.subsonicActive })
+        subsonicOn = subsonic.any
+        bass.configure(p.bassAmount, p.bassHz)
+        leveler.strength = p.autoStrength
+        autoOn = p.autoLevel && p.autoStrength > 0.0
+        stage?.configure(p.width, p.balance, p.delayTenths, p.driverSide, p.crossfeed)
+        air.configure(p.airDb, p.airHz, p.deEss, immediate = first)
+        loudness.configure(p.loudness, p.loudnessAmount)
+        if (p.limiter != limiterOn || first) {
+            truePeak.setEnabled(p.limiter, immediate = first)
+            limiterOn = p.limiter
+        }
+        // With a limiter after it the enhancer may exceed full scale; without one it guards its own headroom.
+        bass.headroomGuard = !p.limiter
+        if (first) {
             graphic.snap(); parametric.snap(); subsonic.snap(); bass.snap()
             configured = true
         } else {
-            smoothChunks = SMOOTH_CHUNKS
+            smoothSteps = rampSteps
         }
     }
 
-    private fun setLimiter(on: Boolean) {
-        if (on && !limiter) truePeak.reset()
-        limiter = on
-        // With a limiter after it the enhancer may exceed full scale; without one it guards its own headroom.
-        bass.headroomGuard = !on
-    }
+    // ---- stage design (any thread; pure functions of the settings) ---------------------------
 
-    // ---- stage configuration ------------------------------------------------------------------
-
-    private fun configureGraphic(gainsDb: FloatArray) {
+    private fun designGraphic(gainsDb: FloatArray): Pair<DoubleArray, BooleanArray> {
         val targets = DoubleArray(BANDS) { gainsDb.getOrElse(it) { 0f }.coerceIn(MIN_DB, MAX_DB).toDouble() }
         val usable = BooleanArray(BANDS) { abs(targets[it]) >= 0.05 && CENTER_HZ[it] < sampleRate / 2.0 }
         val designed = DoubleArray(BANDS) { if (usable[it]) targets[it] else 0.0 }
         val sections = Array(BANDS) { DoubleArray(5) }
         // Neighbour interaction: redesign a few times until the composite response hits each target.
-        repeat(if (usable.count { it } > 1) INTERACTION_ITERATIONS else 1) {
+        // The last pass only rebuilds the sections, so the final correction is not thrown away.
+        val passes = if (usable.count { it } > 1) INTERACTION_ITERATIONS else 1
+        for (pass in 0 until passes) {
             for (band in 0 until BANDS) if (usable[band]) peakingOrfanidis(sections[band], CENTER_HZ[band].toDouble(), designed[band], GRAPHIC_Q[band])
-            if (usable.count { it } <= 1) return@repeat
+            if (usable.count { it } <= 1 || pass == passes - 1) break
             for (band in 0 until BANDS) {
                 if (!usable[band]) continue
                 var actual = 0.0
@@ -180,10 +227,10 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         val active = BooleanArray(BANDS)
         val design = graphic.begin()
         for (band in 0 until BANDS) if (usable[band]) { graphic.set(design, band, sections[band]); active[band] = true }
-        graphic.commit(design, active)
+        return design to active
     }
 
-    private fun configureParametric(bands: List<ParametricBand>) {
+    private fun designParametric(bands: List<ParametricBand>): Pair<DoubleArray, BooleanArray> {
         val active = BooleanArray(MAX_PARAMETRIC)
         val design = parametric.begin()
         for (index in 0 until MAX_PARAMETRIC) {
@@ -201,34 +248,17 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
             parametric.set(design, index, c)
             active[index] = true
         }
-        parametric.commit(design, active)
+        return design to active
     }
 
-    private fun configureSubsonic(hz: Int) {
+    private fun designSubsonic(hz: Int): Pair<DoubleArray, Boolean> {
         val design = subsonic.begin()
-        if (hz < 10 || hz >= sampleRate / 4) {
-            // Ramps to identity, then the bank settles to inactive.
-            subsonic.commit(design, BooleanArray(2))
-            subsonicOn = subsonic.any
-            return
-        }
+        // Off: ramps to identity, then the bank settles to inactive.
+        if (hz < 10 || hz >= sampleRate / 4) return design to false
         val c = DoubleArray(5)
         highPass(c, hz.toDouble(), BUTTERWORTH_Q)
         subsonic.set(design, 0, c); subsonic.set(design, 1, c)
-        subsonic.commit(design, booleanArrayOf(true, true))
-        subsonicOn = true
-    }
-
-    private fun configureBass(amount: Int, hz: Int) {
-        bass.configure(amount, hz)
-    }
-
-    private fun configureAutoLevel(on: Boolean, amount: Int) {
-        val strength = amount.coerceIn(0, 100) / 100.0
-        leveler.strength = strength
-        val next = on && strength > 0.0
-        if (next && !autoOn) leveler.reset()
-        autoOn = next
+        return design to true
     }
 
     // ---- processing ---------------------------------------------------------------------------
@@ -258,7 +288,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
 
     /** Returns false when nothing is active and the data was left untouched. */
     private fun run(data: ByteArray, offset: Int, length: Int): Boolean {
-        val useLimiter = limiter
+        pending.getAndSet(null)?.let { adopt(it) }
+        val useLimiter = truePeak.busy
         val g = graphic.any; val p = parametric.any; val sub = subsonicOn; val b = bass.active; val auto = autoOn
         val stereo = stage
         val st = stereo != null && stereo.isActive()
@@ -273,19 +304,24 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         var index = offset
         var produced = 0
         while (produced < frames) {
-            val chunk = min(SMOOTH_CHUNK_FRAMES, frames - produced)
-            if (smoothChunks > 0) {
-                val alpha = 1.0 / smoothChunks
-                graphic.step(alpha); parametric.step(alpha); subsonic.step(alpha); bass.step(alpha)
-                if (--smoothChunks == 0) {
-                    graphic.settle(); parametric.settle(); subsonic.settle()
-                    subsonicOn = subsonic.any
+            if (stepPhase == 0) {
+                // A control boundary on the persistent 64-frame grid: the ramp and the denormal
+                // flush advance here, independent of how the stream is split into writes.
+                stepPhase = SMOOTH_CHUNK_FRAMES
+                if (smoothSteps > 0) {
+                    val alpha = 1.0 / smoothSteps
+                    graphic.step(alpha); parametric.step(alpha); subsonic.step(alpha); bass.step(alpha)
+                    if (--smoothSteps == 0) {
+                        graphic.settle(); parametric.settle(); subsonic.settle()
+                        subsonicOn = subsonic.any
+                    }
+                }
+                if (++denormalCounter >= DENORMAL_FLUSH_CHUNKS) {
+                    denormalCounter = 0
+                    graphic.flushDenormals(); parametric.flushDenormals(); subsonic.flushDenormals()
                 }
             }
-            if (++denormalCounter >= DENORMAL_FLUSH_CHUNKS) {
-                denormalCounter = 0
-                graphic.flushDenormals(); parametric.flushDenormals(); subsonic.flushDenormals()
-            }
+            val chunk = min(stepPhase, frames - produced)
             val gc = graphic.current; val pc = parametric.current; val sc = subsonic.current
             val l = loudStage && loudness.prepare(chunk)
             for (n in produced until produced + chunk) {
@@ -317,6 +353,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
                 for (ch in 0 until channels) scratch[at + ch] = frame[ch] * gain
                 index += channels * 2
             }
+            stepPhase -= chunk
             produced += chunk
         }
         if (useLimiter) truePeak.process(scratch, frames)
@@ -351,9 +388,9 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     }
 
     /** Current auto-level gain in dB, for the UI. */
-    fun autoLevelGainDb(): Float = if (autoOn) leveler.gainDb() else 0f
+    fun autoLevelGainDb(): Float = if (autoPolicy && autoOn) leveler.gainDb() else 0f
 
-    /** Output delay introduced by the chain, in frames (the limiter's look-ahead when it is on). */
+    /** Output delay introduced by the chain, in frames (the limiter's look-ahead when it is configured on). */
     fun latencyFrames(): Int = if (limiter) truePeak.latencyFrames else 0
 
     private fun biquad(x: Double, c: DoubleArray, k: Int, s: DoubleArray, i: Int): Double {
@@ -460,6 +497,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         const val MAX_PARAMETRIC = 5
         const val MIN_DB = -12f
         const val MAX_DB = 12f
+        /** The limiter's ceiling in dBFS, for the settings page. */
+        val LIMITER_CEILING_DB: Double = 20.0 * log10(TruePeakLimiter.CEILING)
 
         /** Constant-Q per band from the neighbour spacing: a band's bell reaches its neighbours' centres at half gain. */
         val GRAPHIC_Q: DoubleArray = DoubleArray(BANDS) { i ->
@@ -476,7 +515,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         private const val SMOOTH_CHUNK_FRAMES = 64
         private const val DENORMAL_FLOOR = 1e-30
         private const val DENORMAL_FLUSH_CHUNKS = 64
-        private const val SMOOTH_CHUNKS = 24
+        /** Coefficient ramp length; converted to 64-frame steps per sample rate. */
+        private const val RAMP_SECONDS = 0.030
         private val active: MutableSet<EqualizerDsp> = Collections.synchronizedSet(mutableSetOf<EqualizerDsp>())
 
         fun applyToActive(settings: AudioEffectSettings) {

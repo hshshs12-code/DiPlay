@@ -1098,7 +1098,7 @@ private class AudioRenderer(
         val selection = mappedSelection()
         val isMedia = selection.channel == AudioChannel.MEDIA
         // Legacy fork: media may open at the hardware rate and/or in float; other channels stay as-is.
-        val outRate = if (isMedia && outputSampleRate > 0) outputSampleRate else format.sampleRate
+        val outRate = if (isMedia && outputSampleRate > 0 && SincResampler.supports(format.sampleRate, outputSampleRate)) outputSampleRate else format.sampleRate
         val encoding = if (isMedia && floatOutput) AndroidAudioFormat.ENCODING_PCM_FLOAT else AndroidAudioFormat.ENCODING_PCM_16BIT
         val sampleBytes = if (encoding == AndroidAudioFormat.ENCODING_PCM_FLOAT) 4 else 2
         frameBytes = (if (format.channels >= 2) 2 else 1) * sampleBytes

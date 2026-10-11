@@ -111,11 +111,13 @@ class BassEnhancerTest {
         assertTrue("loud harmonics still louder than moderate ones", loudH > midH)
     }
 
-    @Test fun fullScaleBassAtFullAmountNeverClipsWithoutTheLimiter() {
+    @Test fun fullScaleBassAtFullAmountForcesTheLimiterAndNeverClips() {
+        // The enhancer's own guard only caps the harmonics; its all-pass dry path can exceed full
+        // scale on square-ish bass, so the chain turns the limiter on whenever the enhancer is.
         for (hz in listOf(50, 90, 100, 150, 200)) {
             val data = tone(50.0, rate * 2, 1.0, fadeMs = 30.0)
             val dsp = enhancer(100, hz)
-            assertTrue(!dsp.limiter)
+            assertTrue("bass enhance must force the limiter", dsp.limiter)
             dsp.process(data, 0, data.size)
             val all = left(data, 0)
             val peak = all.maxOf { abs(it) }

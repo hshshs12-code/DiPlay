@@ -165,7 +165,7 @@ class TruePeakLimiterTest {
         val distortion = thd(steady, 40.0)
         println("40 Hz +6 dB: THD %.6f %%, peak %.4f".format(distortion * 100, samplePeak(steady)))
         assertTrue("THD ${distortion * 100} % must stay under 1 %", distortion < 0.01)
-        assertTrue(samplePeak(steady) > 0.98 && samplePeak(steady) <= ceiling + 1e-12)
+        assertTrue(samplePeak(steady) > ceiling - 0.005 && samplePeak(steady) <= ceiling + 1e-12)
     }
 
     @Test fun gainEnvelopeHasNoCorners() {

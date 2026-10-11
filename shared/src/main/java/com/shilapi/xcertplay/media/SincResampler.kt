@@ -20,6 +20,10 @@ import kotlin.math.sqrt
  * f − 3.9 kHz, so content up to 21.5 kHz is protected (stopband from 26.5 kHz): −0.03 dB at
  * 19 kHz and −0.35 dB at 20 kHz (was −1.7 / −4.7 dB). Input rates under 40 kHz, whose images land
  * directly in the audible band, keep the old conservative cutoff.
+ *
+ * Only the pairs in [supports] are qualified: a fixed 32-tap kernel cannot reject aliases for large
+ * downsampling ratios (48→16 kHz measured −18 dB), so for anything else the track opens at the
+ * stream's rate and Android's own converter does the work.
  */
 class SincResampler(val inRate: Int, val outRate: Int, private val channels: Int) {
     private val step = inRate.toDouble() / outRate
@@ -125,6 +129,13 @@ class SincResampler(val inRate: Int, val outRate: Int, private val channels: Int
     companion object {
         const val TAPS = 32
         private const val PHASES = 256
+        /** Stream rates the phone or CarPlay sends and the hardware rates this kernel is qualified for. */
+        private val SUPPORTED_IN = intArrayOf(32_000, 44_100, 48_000)
+        private val SUPPORTED_OUT = intArrayOf(44_100, 48_000)
+
+        /** True when the kernel's passband and stopband have been verified for this conversion. */
+        fun supports(inRate: Int, outRate: Int): Boolean =
+            inRate == outRate || (inRate in SUPPORTED_IN && outRate in SUPPORTED_OUT)
         private const val BETA = 8.6 // Kaiser: ~−87 dB sidelobes
         /** Upper edge of the band whose images and aliases must stay inaudible. */
         private const val AUDIBLE_HZ = 20_000.0

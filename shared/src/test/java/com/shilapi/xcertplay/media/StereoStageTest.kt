@@ -247,12 +247,13 @@ class StereoStageTest {
         assertTrue(AudioEffectSettings(driverSeatDelayTenthsMs = 12).hasAdvancedProcessing())
         assertTrue(AudioEffectSettings(crossfeed = 30).hasAdvancedProcessing())
         assertFalse(AudioEffectSettings(driverSide = AudioEffectSettings.DRIVER_RIGHT).hasAdvancedProcessing())
-        // Widening without the limiter reserves headroom for hard-panned peaks.
+        // Widening without the limiter reserves headroom for the worst case, an out-of-phase pair
+        // (L = −R comes out as w·L): width 200 doubles it, so −6 dB.
         val wide = AudioEffectSettings(enabled = true, dspMode = true, stereoWidth = 200).headroomGain()
-        assertEquals(1 / 1.5f, wide, 1e-4f)
+        assertEquals(0.5f, wide, 1e-4f)
 
-        val aligned = listOf("Rage", "Trap Clean", "Melodic")
-        assertEquals(3, SoundPresets.YARIS.count { p -> aligned.any { p.name.contains(it) } })
+        val aligned = listOf("Rage", "Trap Clean", "Melodic")   // Rage and its audit retune both carry the delay
+        assertEquals(4, SoundPresets.YARIS.count { p -> aligned.any { p.name.contains(it) } })
         for (preset in SoundPresets.YARIS) {
             val s = preset.apply(AudioEffectSettings(driverSide = AudioEffectSettings.DRIVER_RIGHT, stereoWidth = 150, crossfeed = 40))
             val expected = if (aligned.any { preset.name.contains(it) }) 12 else 0

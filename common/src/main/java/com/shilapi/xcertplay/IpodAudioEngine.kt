@@ -41,6 +41,7 @@ import com.shilapi.xcertplay.media.AudioEffectSettings
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
 import com.shilapi.xcertplay.media.EqualizerDsp
 import com.shilapi.xcertplay.media.MediaOutputStage
+import com.shilapi.xcertplay.media.SincResampler
 import com.shilapi.xcertplay.media.ThreadPriorities
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.orchestration.MfiTarget
@@ -502,7 +503,7 @@ object IpodAudioEngine {
 
         /** AudioTrack plus DiPlay's chain and output stage (hardware rate, float), like the CarPlay media sink. */
         private inner class TrackOutput(private val rate: Int, private val channels: Int, bufferMillis: Int) {
-            private val outRate = AudioPath.mediaOutputSampleRate(app).takeIf { it > 0 } ?: rate
+            private val outRate = AudioPath.mediaOutputSampleRate(app).takeIf { it > 0 && SincResampler.supports(rate, it) } ?: rate
             private val floatOut = AudioPath.floatOutput(app)
             private val track: AudioTrack
             private val dsp: EqualizerDsp?

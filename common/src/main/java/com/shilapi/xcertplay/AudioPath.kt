@@ -53,7 +53,12 @@ object AudioPath {
     fun floatOutput(context: Context): Boolean = AirPlayPersistence.loadFloatOutput(context)
 
     fun knob(context: Context): Knob {
-        val stored = prefs(context).getString("knob", null)
+        val p = prefs(context)
+        // Builds before 24.38 inferred HARDWARE from ten quiet minutes; that inference is void.
+        if (p.getString("knob_evidence", "")?.startsWith("Android's media volume never moved") == true && p.getString("knob", null) == Knob.HARDWARE.name) {
+            p.edit().remove("knob").putString("knob_evidence", "Earlier automatic hardware verdict discarded: confirm the knob type below.").apply()
+        }
+        val stored = p.getString("knob", null)
         val fromPrefs = Knob.entries.firstOrNull { it.name == stored } ?: Knob.UNKNOWN
         if (fromPrefs != Knob.UNKNOWN) return fromPrefs
         val manager = context.getSystemService(AudioManager::class.java) ?: return Knob.UNKNOWN
@@ -106,13 +111,16 @@ object AudioPath {
             if (sessions == 0) {
                 receiver?.let { runCatching { app.unregisterReceiver(it) } }
                 receiver = null
-                // No external volume changes across enough session time: the knob is not Android's volume.
+                // No external volume change is inconclusive (the knob may simply not have been
+                // turned), so it never promotes the knob to HARDWARE: that would let the next
+                // session pin Android's volume to maximum on a software-volume unit. The watched
+                // time is kept as evidence for the settings page; the user confirms hardware there.
                 if (knob(app) == Knob.UNKNOWN) {
                     val watched = prefs(app).getLong("watched_ms", 0L) + (SystemClock.elapsedRealtime() - sessionStartedAt)
-                    prefs(app).edit().putLong("watched_ms", watched).apply()
-                    if (watched >= HARDWARE_AFTER_MILLIS) {
-                        setKnob(app, Knob.HARDWARE, "Android's media volume never moved during ${watched / 60000} min of sessions, so the knob drives the amplifier.")
-                    }
+                    prefs(app).edit().putLong("watched_ms", watched)
+                        .putString("knob_evidence", if (watched >= HARDWARE_AFTER_MILLIS)
+                            "Android's media volume never moved during ${watched / 60000} min of sessions; if the on-screen volume bar does not move when you turn the knob, set \"Knob is hardware\" below."
+                        else "").apply()
                 }
             }
         }
@@ -167,7 +175,7 @@ object AudioPath {
             append(when (knob) {
                 Knob.HARDWARE -> "Knob: hardware (amplifier chip). "
                 Knob.SOFTWARE -> "Knob: Android software volume. "
-                Knob.UNKNOWN -> "Knob: still detecting (turn it during a session). "
+                Knob.UNKNOWN -> "Knob: not known yet (turn it while music plays; a moving on-screen volume bar means software). "
             })
             knobEvidence(app).takeIf { it.isNotEmpty() }?.let { append(it).append(' ') }
             if (lastVolumeNote.isNotEmpty()) append(lastVolumeNote)

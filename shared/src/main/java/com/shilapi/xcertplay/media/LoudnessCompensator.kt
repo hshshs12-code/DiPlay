@@ -47,6 +47,7 @@ class LoudnessCompensator(private val sampleRate: Int, private val channels: Int
     private var highStep = 0.0
     private var tail = 0
     private var running = false
+    private var flushCounter = 0
 
     private val lowC = DoubleArray(5)
     private val highC = DoubleArray(5)
@@ -84,6 +85,13 @@ class LoudnessCompensator(private val sampleRate: Int, private val channels: Int
             // Both shelves arrive together, RAMP_SECONDS after the change, whatever its size.
             lowStep = abs(lowTarget - lowDb) / rampFrames
             highStep = abs(highTarget - highDb) / rampFrames
+        }
+        if (running) {
+            flushCounter += frames
+            if (flushCounter >= FLUSH_FRAMES) {
+                flushCounter = 0
+                for (i in state.indices) if (abs(state[i]) < DENORMAL_FLOOR) state[i] = 0.0
+            }
         }
         val moving = lowDb != lowTarget || highDb != highTarget
         if (moving) {
@@ -177,6 +185,8 @@ class LoudnessCompensator(private val sampleRate: Int, private val channels: Int
         const val RAMP_SECONDS = 0.2
         const val MAX_BLOCK_FRAMES = 64
         private const val TAIL_SECONDS = 0.05
+        private const val FLUSH_FRAMES = 1024
+        private const val DENORMAL_FLOOR = 1e-24
         private const val GRID_DB = 10.0
 
         /** ISO 226:2003 boost vs. an 80-phon reference at 0, −10 … −60 dB: 100 Hz. */

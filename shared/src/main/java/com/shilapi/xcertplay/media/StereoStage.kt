@@ -77,6 +77,7 @@ class StereoStage(private val sampleRate: Int) {
     private var wideZ = 0.0
     private var wideZ2 = 0.0
     private var crossZ = 0.0
+    private var flushCounter = 0
 
     // Delay lines, one per channel (either side can be the near one, and a side change glides both).
     private val size = Integer.highestOneBit(maxDelaySamples(sampleRate).toInt() + 8) shl 1
@@ -140,6 +141,13 @@ class StereoStage(private val sampleRate: Int) {
     /** Processes one stereo frame in place: `frame[0]` = left, `frame[1]` = right. */
     fun processFrame(frame: DoubleArray) {
         if (ramping) step()
+        if (++flushCounter >= FLUSH_FRAMES) {
+            // Digital silence must not leave subnormals in the one-pole memories.
+            flushCounter = 0
+            if (abs(wideZ) < DENORMAL_FLOOR) wideZ = 0.0
+            if (abs(wideZ2) < DENORMAL_FLOOR) wideZ2 = 0.0
+            if (abs(crossZ) < DENORMAL_FLOOR) crossZ = 0.0
+        }
         val l = frame[0]
         val r = frame[1]
         val m = 0.5 * (l + r)
@@ -242,6 +250,8 @@ class StereoStage(private val sampleRate: Int) {
         private const val SETTLED = 1e-7
         private const val SETTLE_CHECK_FRAMES = 64
         private const val DELAY_GLIDE = 0.01
+        private const val FLUSH_FRAMES = 1024
+        private const val DENORMAL_FLOOR = 1e-24
         private const val WIDEN_HP_HZ = 200.0
         private const val CROSSFEED_LP_HZ = 700.0
         /** Per-side bleed coefficient at crossfeed 100: a/(1−a) = −7.4 dB at low frequencies. */
@@ -261,13 +271,15 @@ class StereoStage(private val sampleRate: Int) {
         }
 
         /**
-         * Worst-case peak growth of the stage in dB, for headroom: a hard-panned source gains
-         * (1+w)/2 when widened to w > 1, and balance lifts the louder side by up to +3 dB.
+         * Worst-case peak growth of the stage in dB, for headroom. Widening to w > 1 scales the
+         * side signal by w above the widening corner: an out-of-phase pair (L = −R) comes out as
+         * w·L, so the bound is w, not the (1+w)/2 of a hard-panned source. Balance lifts the louder
+         * side by up to +3 dB on top.
          */
         fun boostDb(width: Int, balance: Int): Double {
             val w = width.coerceIn(0, 200) / 100.0
             val (gl, gr) = panGains(balance)
-            val peak = (1.0 + max(w, 1.0)) / 2.0 * max(gl, gr)
+            val peak = max(w, 1.0) * max(gl, gr)
             return if (peak <= 1.0) 0.0 else 20.0 * log10(peak)
         }
     }

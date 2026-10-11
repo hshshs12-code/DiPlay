@@ -68,17 +68,21 @@ data class AudioEffectSettings(
     fun dspGainsDb(): FloatArray = FloatArray(EqualizerDsp.BANDS) { dspGainsDb.getOrElse(it) { 0 }.toFloat() }
 
     /**
-     * Linear gain applied to the PCM before any boost so the boosted peaks fit in 16 bits. Android's
-     * Equalizer and BassBoost run after the track with no headroom: a +4 dB band on a loud master
-     * hard-clips, which is heard as fuzz. The level drops by the largest boost in dB instead.
+     * Linear gain that would fit the chain's worst-case boost into full scale when no limiter
+     * protects the output: the serial stages' positive gains add up (graphic maximum, every
+     * boosting parametric band, the air shelf, the stereo stage's anti-phase bound), and the
+     * device BassBoost is taken as roughly +6 dB at full strength. Not applied by the renderers
+     * since 24.15 (the user preferred boosts as set); kept for diagnostics and tests.
      */
     fun headroomGain(): Float {
         if (!enabled) return 1f
         var boostDb = 0f
         if (dspMode) {
-            if (!limiter) {
-                boostDb = maxOf(boostDb, (dspGainsDb.maxOrNull() ?: 0).toFloat())
-                boostDb = maxOf(boostDb, StereoStage.boostDb(stereoWidth, balance).toFloat())
+            if (!limiter && !autoLevel && !loudnessComp && bassEnhance == 0) {
+                boostDb += (dspGainsDb.maxOrNull() ?: 0).coerceAtLeast(0).toFloat()
+                boostDb += parametric.filter { it.type != ParametricBand.OFF }.sumOf { it.gainDb.coerceAtLeast(0f).toDouble() }.toFloat()
+                boostDb += airDb.coerceAtLeast(0).toFloat()
+                boostDb += StereoStage.boostDb(stereoWidth, balance).toFloat()
             }
         } else {
             boostDb = maxOf(boostDb, (bandLevelsMb.maxOrNull() ?: 0) / 100f)

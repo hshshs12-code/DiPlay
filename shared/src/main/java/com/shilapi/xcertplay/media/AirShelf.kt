@@ -10,6 +10,7 @@ import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * De-essed "air": a high shelf (RBJ, slope 1) whose boost is pulled back while sibilance is present,
@@ -21,9 +22,10 @@ import kotlin.math.sqrt
  * g = 0 is the dry signal and a small negative g dips slightly below flat. Only g moves at audio
  * rate, so there is no coefficient recomputation and no zipper noise; g is smoothed per sample.
  *
- * Control path (stereo-linked mono sum): a 5–9 kHz band-pass (2nd-order high-pass at 5 kHz into a
- * 2nd-order low-pass at 9 kHz) feeds a peak envelope that is compared with the broadband peak
- * envelope. Both attack in 1 ms. The broadband reference releases in 60 ms; the sibilance envelope
+ * Control path (stereo-linked by the louder channel, never by a mono sum, so out-of-phase hats and
+ * wide stereo effects are detected like centred ones): a 5–9 kHz band-pass per channel (2nd-order
+ * high-pass at 5 kHz into a 2nd-order low-pass at 9 kHz) feeds a peak envelope that is compared
+ * with the broadband peak envelope. Both attack in 1 ms. The broadband reference releases in 60 ms; the sibilance envelope
  * releases faster (20 ms). With equal releases the two envelopes of an "s" decay together after
  * it ends, their ratio stays put and the shelf would stay down until the reference reaches the
  * music's own level (~250 ms for a −6 dBFS "s" over −30 dBFS music); the faster band release lets
@@ -33,30 +35,40 @@ import kotlin.math.sqrt
  * The gain computer runs every [CONTROL_FRAMES] frames; g follows it with a 1 ms attack and a
  * 20 ms release one-pole per sample.
  *
- * Cost per frame: one biquad per channel plus two control biquads and two envelope updates; the
- * logarithms run once per control block. Configuration changes (gain, corner) are interpolated
+ * Cost per frame: one audio biquad and two control biquads per channel plus two envelope updates;
+ * the logarithms run once per control block. Configuration changes (gain, corner) are interpolated
  * over ~30 ms, and switching off fades g to zero before the stage goes idle.
+ *
+ * Threading: [configure] publishes one immutable [Config] through an atomic reference; the audio
+ * thread takes it with a single getAndSet, so a publish can never be lost or half-read, and only
+ * the audio thread touches coefficients, envelopes and filter memory. Filter memory below
+ * [DENORMAL_FLOOR] is flushed every [FLUSH_FRAMES] frames so digital silence cannot leave subnormals.
  */
 class AirShelf(private val sampleRate: Int, private val channels: Int) {
-    /** Immutable configuration handed from the UI thread to the audio thread. */
-    private class Config(val shelf: DoubleArray, val staticDb: Double, val deEss: Double, val on: Boolean)
+    /**
+     * Immutable configuration handed to the audio thread. [shelf]/[staticDb] are null when the
+     * stage is switching off: the audio thread keeps its current shelf while g fades to zero.
+     */
+    private class Config(val shelf: DoubleArray?, val staticDb: Double?, val deEss: Double, val on: Boolean, val immediate: Boolean)
 
-    @Volatile private var pending: Config? = null
-    @Volatile private var pendingSnap = false
+    private val pending = AtomicReference<Config?>(null)
 
     // Audio-thread state
-    private var config = Config(identity(), 0.0, 0.0, false)
+    private var config = Config(identity(), 0.0, 0.0, false, false)
     private val shelf = identity()          // current (interpolated) shelf coefficients
     private var staticDb = 0.0              // current (interpolated) static shelf gain in dB
+    private var targetShelf = identity()    // configured shelf the glide heads for
+    private var targetDb = 0.0
     private var interpolate = 0             // control blocks left in a configuration glide
     private val shelfState = DoubleArray(channels * 4)
     private val band = DoubleArray(10)
-    private val bandState = DoubleArray(8)
+    private val bandState = DoubleArray(channels * 8)
     private var sibEnv = 0.0
     private var broadEnv = 0.0
     private var g = 0.0
     private var gTarget = 0.0
     private var counter = 0
+    private var flushCounter = 0
     private var running = false
 
     private val envAttack = coefficient(ENV_ATTACK_S)
@@ -82,13 +94,11 @@ class AirShelf(private val sampleRate: Int, private val channels: Int) {
         val db = airDb.coerceIn(0, MAX_DB).toDouble()
         val hz = airHz.toDouble().coerceIn(1000.0, sampleRate * 0.45)
         val on = db > 0.0
-        val coefficients = if (on) highShelf(hz, db) else (pending ?: config).shelf.copyOf()
-        pending = Config(coefficients, if (on) db else (pending ?: config).staticDb, deEss.coerceIn(0, 100) / 100.0, on)
-        pendingSnap = immediate
+        pending.set(Config(if (on) highShelf(hz, db) else null, if (on) db else null, deEss.coerceIn(0, 100) / 100.0, on, immediate))
     }
 
     /** True while the stage changes the signal (including the fade-out after switching off). */
-    val isActive: Boolean get() = running || pending?.on == true
+    val isActive: Boolean get() = running || pending.get()?.on == true
 
     /** Effective high-frequency gain of the stage right now, in dB (static gain minus de-essing). */
     fun gainDb(): Double {
@@ -100,17 +110,31 @@ class AirShelf(private val sampleRate: Int, private val channels: Int) {
         shelfState.fill(0.0); bandState.fill(0.0); sibEnv = 0.0; broadEnv = 0.0
     }
 
+    private fun flushDenormals() {
+        for (i in shelfState.indices) if (abs(shelfState[i]) < DENORMAL_FLOOR) shelfState[i] = 0.0
+        for (i in bandState.indices) if (abs(bandState[i]) < DENORMAL_FLOOR) bandState[i] = 0.0
+        if (sibEnv < DENORMAL_FLOOR) sibEnv = 0.0
+        if (broadEnv < DENORMAL_FLOOR) broadEnv = 0.0
+        if (abs(g) < DENORMAL_FLOOR) g = 0.0
+    }
+
     /** Processes one interleaved frame ([channels] samples, full scale = 1.0) in place. */
     fun processFrame(frame: DoubleArray) {
         if (counter == 0) control()
         if (!running) return
         counter = (counter + 1) % CONTROL_FRAMES
-        // Control path: stereo-linked mono sum through the 5–9 kHz band-pass.
-        var mono = 0.0
-        for (ch in 0 until channels) mono += frame[ch]
-        mono /= channels
-        val sib = abs(biquad(biquad(mono, band, 0, bandState, 0), band, 5, bandState, 4))
-        val broad = abs(mono)
+        if (++flushCounter >= FLUSH_FRAMES) { flushCounter = 0; flushDenormals() }
+        // Control path: each channel through its own 5–9 kHz band-pass, linked by the louder one.
+        var sib = 0.0
+        var broad = 0.0
+        for (ch in 0 until channels) {
+            val x = frame[ch]
+            val s = ch * 8
+            val b = abs(biquad(biquad(x, band, 0, bandState, s), band, 5, bandState, s + 4))
+            if (b > sib) sib = b
+            val a = abs(x)
+            if (a > broad) broad = a
+        }
         sibEnv += (sib - sibEnv) * (if (sib > sibEnv) envAttack else sibRelease)
         broadEnv += (broad - broadEnv) * (if (broad > broadEnv) envAttack else broadRelease)
         g += (gTarget - g) * (if (gTarget < g) gainAttack else gainRelease)
@@ -136,15 +160,16 @@ class AirShelf(private val sampleRate: Int, private val channels: Int) {
 
     /** Once per control block: pick up configuration, glide coefficients, run the gain computer. */
     private fun control() {
-        pending?.let { next ->
-            pending = null
+        pending.getAndSet(null)?.let { next ->
             val wasRunning = running
             config = next
-            if (pendingSnap || !wasRunning) {
-                System.arraycopy(next.shelf, 0, shelf, 0, 5)
-                staticDb = next.staticDb
+            if (next.shelf != null) targetShelf = next.shelf
+            if (next.staticDb != null) targetDb = next.staticDb
+            if (next.immediate || !wasRunning) {
+                System.arraycopy(targetShelf, 0, shelf, 0, 5)
+                staticDb = targetDb
                 interpolate = 0
-                if (!wasRunning) { reset(); g = if (pendingSnap) 1.0 else 0.0 }
+                if (!wasRunning) { reset(); g = if (next.immediate) 1.0 else 0.0 }
             } else {
                 interpolate = interpolateBlocks
             }
@@ -154,8 +179,8 @@ class AirShelf(private val sampleRate: Int, private val channels: Int) {
         val cfg = config
         if (interpolate > 0) {
             val alpha = 1.0 / interpolate
-            for (k in 0 until 5) shelf[k] += (cfg.shelf[k] - shelf[k]) * alpha
-            staticDb += (cfg.staticDb - staticDb) * alpha
+            for (k in 0 until 5) shelf[k] += (targetShelf[k] - shelf[k]) * alpha
+            staticDb += (targetDb - staticDb) * alpha
             interpolate--
         }
         if (!cfg.on) {
@@ -254,5 +279,8 @@ class AirShelf(private val sampleRate: Int, private val channels: Int) {
         private const val SIB_GATE = 0.001
         private const val BROAD_GATE = 0.000316
         private const val IDLE_G = 1e-4
+        private const val FLUSH_FRAMES = 1024
+        /** −480 dB: inaudible by any measure, far above the subnormal range. */
+        private const val DENORMAL_FLOOR = 1e-24
     }
 }
