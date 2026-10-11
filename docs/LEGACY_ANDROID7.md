@@ -39,7 +39,13 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.35)
+## Fork features (0.2.13-legacy24.36)
+
+24.36: plug-in on the iPod screen starts iPod audio
+- While `IpodModeActivity` is in the foreground (or an iPod session is running), a USB attach is
+  handed to iPod mode instead of CarPlay by the CarPlay host, and the iPod screen's own attach
+  receiver starts the session without tapping Start. The "start iPod audio on plug-in" setting
+  still covers plug-ins from anywhere else.
 
 24.35: sound UI for a car touchscreen, EQ page fix, home update button, 808 Heavy Pure
 - `EqualizerPanel` rebuilt: preset tiles, collapsible groups (Bands, Bass, Loudness and

@@ -545,9 +545,10 @@ class CarPlayHostActivity : ComponentActivity() {
         ManualParkedVideo.bind(this)
         com.shilapi.xcertplay.media.StartupWarmup.run(com.shilapi.xcertplay.media.AudioEffectSettings.load(this).let { it.enabled && it.dspMode })
         if (isIphoneUsbAttachment(intent)) {
-            if (IpodSettings.autoStartOnPlugIn(this) && !CarPlayBackgroundSession.hasSession()) {
-                // Legacy fork: the user chose iPod audio over CarPlay for plug-ins.
-                IpodAudioEngine.log(this, "USB attach: starting iPod audio instead of CarPlay")
+            // Legacy fork: iPod audio takes the plug-in when the user chose it, when the iPod screen is
+            // the one on screen, or when an iPod session is already running.
+            if ((IpodSettings.autoStartOnPlugIn(this) || IpodModeActivity.inForeground || IpodAudioEngine.isRunning()) && !CarPlayBackgroundSession.hasSession()) {
+                IpodAudioEngine.log(this, "USB attach: starting iPod audio instead of CarPlay (foreground=${IpodModeActivity.inForeground} running=${IpodAudioEngine.isRunning()})")
                 startActivity(Intent(this, IpodModeActivity::class.java).putExtra("auto_start", true))
                 finish()
                 return

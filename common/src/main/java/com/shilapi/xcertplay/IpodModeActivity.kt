@@ -4,7 +4,9 @@ package com.shilapi.xcertplay
 import android.Manifest
 import android.app.Activity
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
@@ -267,7 +269,31 @@ class IpodModeActivity : Activity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyFullscreen()
     }
-    override fun onResume() { super.onResume(); applyFullscreen() }
+    /** Plugging the iPhone in while this screen is up starts iPod audio by itself. */
+    private val attachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            if (intent.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+            val device = intent.getParcelableExtra<android.hardware.usb.UsbDevice>(UsbManager.EXTRA_DEVICE) ?: return
+            if (device.vendorId != com.shilapi.xcertplay.transport.IphoneUsbMatcher.APPLE_VENDOR_ID) return
+            if (IpodAudioEngine.isRunning()) return
+            IpodAudioEngine.log(this@IpodModeActivity, "iPhone plugged in while the iPod screen is open: starting")
+            // Give Android a moment to settle permission and enumeration before claiming interfaces.
+            handler.removeCallbacks(autoStart); handler.postDelayed(autoStart, 900)
+        }
+    }
+    private val autoStart = Runnable { if (!IpodAudioEngine.isRunning() && inForeground) startEngine() }
+
+    override fun onResume() {
+        super.onResume(); applyFullscreen()
+        inForeground = true
+        runCatching { registerReceiver(attachReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED)) }
+    }
+    override fun onPause() {
+        inForeground = false
+        handler.removeCallbacks(autoStart)
+        runCatching { unregisterReceiver(attachReceiver) }
+        super.onPause()
+    }
 
     override fun onStart() {
         super.onStart(); IpodAudioEngine.listeners.add(engineListener); handler.post(refresh)
@@ -453,6 +479,8 @@ class IpodModeActivity : Activity() {
     }
 
     companion object {
+        /** True while this screen is the one on screen; the CarPlay host hands plug-ins to it. */
+        @Volatile var inForeground = false
         private val BG = Color.rgb(10, 12, 18); private val SURFACE = Color.rgb(24, 28, 38); private val BORDER = Color.rgb(50, 56, 72)
         private val ACCENT = Color.rgb(166, 200, 255); private val TEXT = Color.rgb(246, 247, 250); private val MUTED = Color.rgb(170, 178, 194)
         private val WARNING = Color.rgb(255, 180, 120)
