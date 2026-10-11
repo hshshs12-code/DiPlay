@@ -84,7 +84,7 @@ class Iap2IpodClient(
     fun setShuffle(mode: Int) { if (ready && capabilities.setNowPlaying) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(shuffle = mode))) }
     fun setRepeat(mode: Int) { if (ready && capabilities.setNowPlaying) outgoing.add(Command(Iap2IpodMessages.setNowPlaying(repeat = mode))) }
     fun launchApp(bundleId: String) { if (ready && capabilities.appLaunch) outgoing.add(Command(Iap2IpodMessages.requestAppLaunch(bundleId))) }
-    fun restartAudio() { if (ready) outgoing.add(Command(Iap2IpodMessages.startUsbDeviceModeAudio())) }
+    fun restartAudio() { if (ready && capabilities.usbAudio) outgoing.add(Command(Iap2IpodMessages.startUsbDeviceModeAudio())) }
 
     private fun drainOutgoing() {
         while (true) {
@@ -99,7 +99,7 @@ class Iap2IpodClient(
     private fun handle(frame: Iap2Frame) {
         when (frame.messageId) {
             Iap2IpodMessages.START_IDENTIFICATION -> {
-                listener.onProgress("iap2 rx 1d00 start-identification → sending accessory identity level=$level (${capabilities.describe()})")
+                listener.onProgress("iap2 rx 1d00 start-identification → sending accessory identity level=$level (${capabilities.describe()}) ${Iap2IpodMessages.describeLists(level)}")
                 send(Iap2IpodMessages.identificationInformation(config, level))
             }
             Iap2IpodMessages.IDENTIFICATION_ACCEPTED -> {
@@ -114,7 +114,7 @@ class Iap2IpodClient(
                     throw IphoneUsbException.Protocol("The iPhone rejected every accessory identification profile (last rejected parameters $ids)")
                 }
                 level++
-                listener.onProgress("iap2 rx 1d03 identification rejected parameters $ids → retrying with level=$level (${capabilities.describe()})")
+                listener.onProgress("iap2 rx 1d03 identification rejected parameters $ids → retrying with level=$level (${capabilities.describe()}) ${Iap2IpodMessages.describeLists(level)}")
                 send(Iap2IpodMessages.identificationInformation(config, level))
             }
             Iap2IpodMessages.REQUEST_AUTHENTICATION_CERTIFICATE -> {
@@ -167,8 +167,8 @@ class Iap2IpodClient(
         if (c.power) { send(Iap2IpodMessages.powerSourceUpdate(config)); send(Iap2IpodMessages.startPowerUpdates()) }
         send(Iap2IpodMessages.startNowPlayingUpdates())
         if (c.hid) send(Iap2IpodMessages.startHid())
-        send(Iap2IpodMessages.startUsbDeviceModeAudio())
-        listener.onProgress("iap2 ready level=$level (${c.describe()}): sent ${if (c.power) "ae03 power ${config.availableCurrentMilliAmps}mA, ae00, " else ""}5000 now playing, ${if (c.hid) "6800 media remote, " else ""}da00 start usb audio")
+        if (c.usbAudio) send(Iap2IpodMessages.startUsbDeviceModeAudio())
+        listener.onProgress("iap2 ready level=$level (${c.describe()}): sent ${if (c.power) "ae03 power ${config.availableCurrentMilliAmps}mA, ae00, " else ""}5000 now playing${if (c.hid) ", 6800 media remote" else ""}${if (c.usbAudio) ", da00 start usb audio" else " (no USB-audio request accepted: relying on the phone routing audio to USB by itself)"}")
         listener.onStage(Stage.READY)
     }
 

@@ -39,7 +39,18 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.28)
+## Fork features (0.2.13-legacy24.29)
+
+24.29: iPod identification elimination ladder
+- Second on-car report: every 24.27 level was rejected on parameters 6/7,
+  including the minimal one, so the fault is not in the optional groups the
+  ladder removed. The ladder is now by elimination: level 1 drops only the
+  USB-device-mode-audio messages, 2 only the HID remote, 3 only app launch +
+  SetNowPlaying, 4 only power, 5 the fork's wired-proven message set, 6 auth +
+  Now Playing only. Each attempt logs its exact message-ID lists (payload
+  lines are redacted from uploads), so the next report names the culprit.
+- When the accepted level has no USB-audio request, the engine's 6 s capture
+  fallback still tries to pick the stream up.
 
 24.28: float track buffer sized correctly
 - The on-car log showed the float media track at 684 ms instead of the

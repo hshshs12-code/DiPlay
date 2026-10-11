@@ -32,17 +32,22 @@ class Iap2IpodMessagesTest {
     }
 
     @Test
-    fun fallbackLevelsShedFeaturesInOrder() {
+    fun eliminationLevelsEachRemoveOneGroup() {
+        val level1 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 1))
+        assertTrue(!level1.u16List(6).contains(0xda00) && !level1.u16List(7).contains(0xda01) && level1.u16List(6).contains(0x6800))
         val level2 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 2))
-        assertTrue(!level2.u16List(6).contains(0x6800) && !level2.u16List(6).contains(0xea02) && !level2.u16List(6).contains(0x5003))
-        assertTrue(level2.u16List(6).contains(0xae03) && level2.u16List(6).contains(0xda00))
-        assertTrue(!level2.has(18))
-        val level3 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 3))
-        assertTrue(!level3.u16List(6).contains(0xae03) && !level3.u16List(7).contains(0xae01))
-        assertEquals(0, level3.u8(8))
-        assertTrue(level3.u16List(6).containsAll(listOf(0xaa01, 0xaa03, 0x5000, 0xda00)))
-        assertEquals("no media remote, no app launch, no seek/shuffle, no power updates", Iap2IpodMessages.capabilities(3).describe())
+        assertTrue(!level2.u16List(6).contains(0x6800) && !level2.has(18) && level2.u16List(6).contains(0xda00))
+        val level4 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 4))
+        assertTrue(!level4.u16List(6).contains(0xae03) && !level4.u16List(7).contains(0xae01))
+        assertEquals(0, level4.u8(8))
+        val level5 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 5))
+        assertEquals(listOf(0xaa01, 0xaa03, 0x5000, 0x5002, 0xae00, 0xae02, 0xae03), level5.u16List(6))
+        assertEquals(listOf(0xaa00, 0xaa02, 0xaa04, 0xaa05, 0x5001, 0xae01), level5.u16List(7))
+        val level6 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 6))
+        assertEquals(listOf(0xaa01, 0xaa03, 0x5000, 0x5002), level6.u16List(6))
         assertEquals("full", Iap2IpodMessages.capabilities(0).describe())
+        assertEquals("no USB-audio request", Iap2IpodMessages.capabilities(1).describe())
+        assertTrue(Iap2IpodMessages.describeLists(0).contains("da00") && Iap2IpodMessages.describeLists(0).contains("received=["))
     }
 
     @Test
