@@ -319,7 +319,11 @@ class DiPlayActivity : ComponentActivity() {
         adbSwitches.clear()
         adbStatus = null
         val compact = isCompactLayout
-        val scroll = ScrollView(this).apply { setBackgroundColor(BG); isFillViewport = true; clipToPadding = false }
+        val scroll = ScrollView(this).apply {
+            // Soft wash fading into the base colour, like the iPod screen's artwork backdrop.
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(WASH, BG, BG))
+            isFillViewport = true; clipToPadding = false
+        }
         rootScroll = scroll
         val content = column().apply {
             if (compact) setPadding(dp(12), dp(10), dp(12), dp(12))
@@ -352,9 +356,11 @@ class DiPlayActivity : ComponentActivity() {
         content.addView(header)
         content.addView(space(if (compact) 8 else 24))
         if (page == "eq") {
-            content.addView(label("Equalizer", 30, TEXT, true).apply { setPadding(0, 0, 0, dp(12)) })
-            section(content, "Equalizer and bass boost", R.drawable.ic_dp_audio) { card -> audioEffectsSection(card) }
+            content.addView(label("Sound", 30, TEXT, true).apply { setPadding(0, 0, 0, dp(12)) })
+            section(content, "Equalizer and sound processing", R.drawable.ic_dp_audio) { card -> audioEffectsSection(card) }
             content.addView(button("Back", false) { page = "home"; render() }, matchButton(12, 56))
+            setContentView(scroll)
+            renderedPage = page
             return
         }
         when (page) {
@@ -382,18 +388,25 @@ class DiPlayActivity : ComponentActivity() {
     // ---- Legacy fork: simple home screen ------------------------------------------------------
     private fun simpleHome(content: LinearLayout) {
         val wide = resources.configuration.screenWidthDp >= 700
-        status = label(getString(R.string.ready_when_you_are), 20, TEXT, true).apply { setPadding(0, 0, 0, dp(12)) }
-        content.addView(status)
+        // Header: app name on the left, live status as a pill on the right (iPod-screen style).
+        val header = row().apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(14)) }
+        header.addView(label("DiPlay", 26, TEXT, true), LinearLayout.LayoutParams(0, -2, 1f))
+        status = label(getString(R.string.ready_when_you_are), 13, MUTED).apply {
+            background = GradientDrawable().apply { setColor(Color.argb(60, 255, 255, 255)); cornerRadius = dp(14).toFloat() }
+            setPadding(dp(12), dp(6), dp(12), dp(6)); maxLines = 2; gravity = Gravity.END
+        }
+        header.addView(status, LinearLayout.LayoutParams(0, -2, 1.2f))
+        content.addView(header)
         setupError?.let { content.addView(label(it, 14, WARNING).apply { setPadding(0, 0, 0, dp(8)) }) }
         fun tile(title: String, subtitle: String, primary: Boolean, click: () -> Unit): View {
             val holder = column().apply {
-                background = rounded(if (primary) ACCENT else SURFACE, BORDER)
+                background = rounded(if (primary) TEXT else Color.argb(32, 255, 255, 255), if (primary) TEXT else BORDER)
                 setPadding(dp(18), dp(16), dp(18), dp(16))
                 isClickable = true; isFocusable = true
                 setOnClickListener { click() }
             }
             holder.addView(label(title, 22, if (primary) BG else TEXT, true))
-            holder.addView(label(subtitle, 13, if (primary) BG else MUTED).apply { setPadding(0, dp(4), 0, 0) })
+            holder.addView(label(subtitle, 13, if (primary) Color.rgb(60, 66, 80) else MUTED).apply { setPadding(0, dp(4), 0, 0) })
             return holder
         }
         val tiles = mutableListOf<View>()
@@ -409,7 +422,8 @@ class DiPlayActivity : ComponentActivity() {
         tiles += tile(if (IpodAudioEngine.isRunning()) "iPod audio ▶" else "iPod audio (USB)", if (IpodAudioEngine.isRunning()) "Playing · tap to control" else "Music without CarPlay", false) { openIpodMode() }
         tiles += tile("Choose iPhone", "Wireless: ${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }
         tiles += tile("Equalizer", "EQ, bass boost, loudness", false) { page = "eq"; render() }
-        tiles += tile("Settings", "Display, audio, USB, updates", false) { page = "settings"; render() }
+        tiles += tile("Update", "Check GitHub for a new build", false) { homeUpdateCheck() }
+        tiles += tile("Settings", "Display, audio, USB", false) { page = "settings"; render() }
         if (sessionActive) tiles += tile("Disconnect", "End the CarPlay session", false) {
             CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus(); render() } }
         }
@@ -519,6 +533,7 @@ class DiPlayActivity : ComponentActivity() {
         right.addView(button(getString(R.string.connect_with_usb), false) { connect(false) }, matchButton())
         right.addView(label(getString(R.string.plug_your_iphone_into_a_usb_data_port_allow_carplay_when_y), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(10), dp(8), dp(24)) })
         right.addView(button("iPod audio (USB)", false) { openIpodMode() }, matchButton())
+        right.addView(button("Check for updates", false) { homeUpdateCheck() }, matchButton())
         right.addView(label("Play the iPhone's audio through the car without CarPlay.", 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(10), dp(8), dp(24)) })
         right.addView(button(getString(R.string.settings), false) { page = "settings"; render() }, matchButton())
         right.addView(label(getString(R.string.make_diplay_feel_right_for_your_car), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(24)) })
@@ -3630,6 +3645,21 @@ class DiPlayActivity : ComponentActivity() {
         })
     }
 
+    /** Legacy fork: update check from the home screen, in a dialog that reuses the settings-page flow. */
+    private fun homeUpdateCheck() {
+        val column = column().apply { setPadding(dp(24), dp(16), dp(24), dp(8)) }
+        val message = label("Checking GitHub for the latest release…", 15, TEXT)
+        val action = button("Check for updates", true) { startUpdateCheck() }
+        column.addView(message)
+        column.addView(action, matchButton(12, 56))
+        updateMessage = message
+        updateActionButton = action
+        AlertDialog.Builder(this).setTitle("Update DiPlay").setView(column).setNegativeButton("Close", null)
+            .setOnDismissListener { if (updateMessage === message) { updateMessage = null; updateActionButton = null } }
+            .show()
+        startUpdateCheck()
+    }
+
     private fun startUpdateCheck() {
         if (updateBusy) return
         updateBusy = true
@@ -3808,11 +3838,11 @@ class DiPlayActivity : ComponentActivity() {
     private fun button(title: String, primary: Boolean, click: () -> Unit) = Button(this).apply {
         text = title; isAllCaps = false; textSize = 18f; setTextColor(if (primary) BG else TEXT)
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        background = android.graphics.drawable.RippleDrawable(ColorStateList.valueOf(0x336F9FD9), rounded(if (primary) ACCENT else BUTTON, if (primary) ACCENT else BORDER), null)
+        background = android.graphics.drawable.RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), rounded(if (primary) TEXT else BUTTON, if (primary) TEXT else BORDER), null)
         setPadding(dp(16), 0, dp(16), 0); minHeight = dp(56); stateListAnimator = null
         setOnClickListener { click() }
     }
-    private fun rounded(color: Int, stroke: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(20).toFloat(); setStroke(dp(1), stroke) }
+    private fun rounded(color: Int, stroke: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(22).toFloat(); setStroke(dp(1), stroke) }
     private fun matchButton(top: Int = 0, height: Int = 68) = LinearLayout.LayoutParams(-1, dp(height)).apply { topMargin = dp(top) }
     private fun space(height: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
     // Rounded, not truncated: below 160 dpi dp(1) became 0 and every border vanished.
@@ -3821,14 +3851,16 @@ class DiPlayActivity : ComponentActivity() {
         private const val BYD_VEHICLE_TAG = "DiPlay-BYD13"
         private const val VEHICLE_VALIDATION_RETRY_MILLIS = 500L
         private const val ADB_KEY_SAVE_WAIT_MILLIS = 500L
-        private val BG = Color.rgb(12, 17, 27)
-        private val SURFACE = Color.rgb(21, 30, 44)
-        // One step lighter than a card, so a button reads as a button even where its 1 px border is faint.
-        private val BUTTON = Color.rgb(31, 43, 61)
-        private val BORDER = Color.rgb(42, 56, 75)
+        // Legacy fork: the iPod screen's design language, shared by every page.
+        private val BG = Color.rgb(10, 12, 18)
+        private val SURFACE = Color.rgb(24, 28, 38)
+        // Translucent white over the card so a button reads as a button on any backdrop.
+        private val BUTTON = Color.argb(36, 255, 255, 255)
+        private val BORDER = Color.argb(60, 255, 255, 255)
         private val ACCENT = Color.rgb(166, 200, 255)
-        private val TEXT = Color.rgb(241, 245, 252)
-        private val MUTED = Color.rgb(168, 182, 202)
+        private val TEXT = Color.rgb(246, 247, 250)
+        private val MUTED = Color.rgb(170, 178, 194)
+        private val WASH = Color.rgb(30, 36, 54)
         private val WARNING = Color.rgb(255, 196, 128)
     }
 }

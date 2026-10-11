@@ -84,6 +84,11 @@ object SoundPresets {
             parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 90, bassEnhanceHz = 100,
         ),
         Preset(
+            "Yaris · 808 Heavy Pure", "808 Heavy without the harmonic enhancer: the real sub-bass untouched below 100 Hz, limiter on.",
+            intArrayOf(-3, 6, 4, 1, -2, -1, 0, 1, 1, 2, 3, 2),
+            parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 0,
+        ),
+        Preset(
             "Yaris · Trap Clean", "Balanced trap mix: tight bass, clear vocals, no mud around 500 Hz.",
             intArrayOf(-2, 3, 2, 0, -2, 0, 0, 1, 1, 2, 3, 2),
             parametric = YARIS_CORRECTION, subsonicHz = 32, bassEnhance = 45, bassEnhanceHz = 90, autoLevel = true, autoLevelAmount = 40,

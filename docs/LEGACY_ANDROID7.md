@@ -39,7 +39,19 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.34)
+## Fork features (0.2.13-legacy24.35)
+
+24.35: sound UI for a car touchscreen, EQ page fix, home update button, 808 Heavy Pure
+- `EqualizerPanel` rebuilt: preset tiles, collapsible groups (Bands, Bass, Loudness and
+  dynamics, Tone, Stereo, Parametric EQ) and big −/+ steppers instead of drag sliders.
+- Fix: the "eq" page in `DiPlayActivity.render` returned before `setContentView`, so the
+  Equalizer tile on the home screen and the Equalizer button on the iPod screen did nothing.
+- "Update" tile on the simple home and "Check for updates" on the classic home, running the
+  existing GitHub release check in a dialog.
+- Preset "Yaris · 808 Heavy Pure": 808 Heavy's curve and correction with the bass enhancer off
+  (no harmonics, no sub trim), subsonic 40 Hz, limiter on.
+- Whole app restyled to the iPod screen's design language: darker base with a soft wash,
+  translucent rounded tiles and buttons (white primary), status pill in the home header.
 
 24.34: professional sound-processing pass (seven parallel DSP work streams, merged by hand)
 - `BassEnhancer`: Linkwitz-Riley 4th-order band split with matching all-pass, peak envelope with

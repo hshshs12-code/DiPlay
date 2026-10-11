@@ -2,13 +2,17 @@ package com.shilapi.xcertplay.settings
 
 import android.app.AlertDialog
 import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.shilapi.xcertplay.media.AirShelf
 import com.shilapi.xcertplay.LoudnessVolumeTracker
+import com.shilapi.xcertplay.media.AirShelf
 import com.shilapi.xcertplay.media.AudioEffectSettings
 import com.shilapi.xcertplay.media.EqPresets
 import com.shilapi.xcertplay.media.EqualizerDsp
@@ -16,57 +20,115 @@ import com.shilapi.xcertplay.media.ParametricBand
 import com.shilapi.xcertplay.media.SoundPresets
 
 /**
- * The equalizer UI shared by the main settings page and the in-CarPlay overlay. The host supplies
- * its own themed slider, switch and button widgets; this panel owns the logic and the band view.
+ * The sound-processing UI shared by the main settings page and the in-CarPlay overlay, laid out
+ * for a cheap resistive car touchscreen: preset tiles you can hit with a thumb, big minus/plus
+ * steppers instead of drag sliders, and collapsible groups so the page stays short. The host still
+ * supplies its themed switch and button widgets; the slider factory is kept for compatibility but
+ * the steppers below replace it.
  */
 class EqualizerPanel(
     private val context: Context,
     private val accent: Int,
     private val textColor: Int,
     private val mutedColor: Int,
-    private val sliderFactory: (title: String, steps: List<Int>, current: Int, describe: (Int) -> String, onChange: (Int) -> Unit) -> View,
+    @Suppress("unused") private val sliderFactory: (title: String, steps: List<Int>, current: Int, describe: (Int) -> String, onChange: (Int) -> Unit) -> View,
     private val switchFactory: (label: String, checked: Boolean, description: String, onChanged: (Boolean) -> Unit) -> View,
     private val buttonFactory: (title: String, onClick: () -> Unit) -> View,
 ) {
     private var settings = AudioEffectSettings.load(context)
     private val density = context.resources.displayMetrics.density
+    private val wide = context.resources.configuration.screenWidthDp >= 700
     private fun dp(v: Int) = (v * density).toInt()
     private fun save(next: AudioEffectSettings) { settings = next; AudioEffectSettings.save(context, next) }
+    private lateinit var body: LinearLayout
 
     fun build(): View {
         val root = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         root.addView(switchFactory("Enable audio effects", settings.enabled,
-            "Equalizer, bass boost and loudness on CarPlay music. Changes below apply live; the master switch applies on the next track.") { enabled ->
+            "Equalizer, bass, dynamics and stereo processing on music (CarPlay and iPod mode). Changes apply live.") { enabled ->
             save(settings.copy(enabled = enabled))
             body.visibility = if (enabled) View.VISIBLE else View.GONE
         })
         body.visibility = if (settings.enabled) View.VISIBLE else View.GONE
         root.addView(body)
-        buildBody(body)
+        buildBody()
         return root
     }
 
-    private fun buildBody(body: LinearLayout) {
+    private fun rebuild() = buildBody()
+
+    private fun buildBody() {
         body.removeAllViews()
         val deviceInfo = AudioEffectSettings.bandInfo()
-        val dsp = settings.dspMode
-        body.addView(switchFactory("12-band software equalizer", dsp,
-            if (dsp) "On: 12 bands from 31 Hz to 16 kHz, ±12 dB, processed by DiPlay (a few percent of one core). Applies on the next track."
-            else "Off: the head unit's own ${deviceInfo.centerHz.size}-band equalizer effect. Switch on for 12 bands.") { enabled ->
-            save(settings.copy(dspMode = enabled))
-            buildBody(body)
+        buildPresets(deviceInfo)
+        body.addView(switchFactory("12-band software equalizer", settings.dspMode,
+            if (settings.dspMode) "On: DiPlay's own processing (12 bands, bass enhancer, dynamics, stereo, tone)."
+            else "Off: only the head unit's own ${deviceInfo.centerHz.size}-band equalizer effect. Switch on for everything below.") { enabled ->
+            save(settings.copy(dspMode = enabled)); rebuild()
         })
-        // Preset picker
-        val presetLabel = TextView(context).apply {
-            text = "Preset: ${settings.presetName.ifEmpty { "Custom" }}"; textSize = 16f; setTextColor(textColor)
-            setPadding(0, dp(12), 0, dp(4))
+        buildBands(deviceInfo)
+        if (settings.dspMode) {
+            buildBass()
+            buildDynamics()
+            buildTone()
+            buildStereo()
+            buildParametric()
+        } else {
+            section("Device effects", "device") { card ->
+                card.addView(stepper("Bass boost (device)", (0..100 step 10).toList(), settings.bassStrength / 10 / 10 * 10, { "$it %" }) { save(settings.copy(bassStrength = it * 10)) })
+                card.addView(stepper("Loudness boost (device)", (0..20).toList(), settings.loudnessGainMb / 100, { if (it == 0) "Off" else "+$it dB" }) { save(settings.copy(loudnessGainMb = it * 100)) })
+            }
         }
-        body.addView(presetLabel)
-        val bands = EqualizerBandsView(context).apply {
-            accent = this@EqualizerPanel.accent; textColor = this@EqualizerPanel.textColor; mutedColor = this@EqualizerPanel.mutedColor
+        body.addView(buttonFactory("Reset everything to flat") {
+            save(AudioEffectSettings(enabled = true, dspMode = settings.dspMode, driverSide = settings.driverSide, presetName = "Flat"))
+            rebuild()
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(14) })
+    }
+
+    // ---- presets -------------------------------------------------------------------------------
+
+    private fun buildPresets(deviceInfo: AudioEffectSettings.Companion.BandInfo) {
+        body.addView(heading("Presets", "Tap one. Current: ${settings.presetName.ifEmpty { "Custom" }}"))
+        if (settings.dspMode) {
+            val columns = if (wide) 4 else 2
+            var row: LinearLayout? = null
+            SoundPresets.YARIS.forEachIndexed { index, preset ->
+                if (index % columns == 0) { row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }; body.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }) }
+                val active = settings.presetName == preset.name
+                val tile = LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = rounded(if (active) accent else Color.argb(32, 255, 255, 255), if (active) accent else Color.argb(60, 255, 255, 255))
+                    setPadding(dp(12), dp(12), dp(12), dp(12)); isClickable = true; isFocusable = true
+                    addView(TextView(context).apply { text = preset.name.removePrefix("Yaris · "); textSize = 17f; setTypeface(typeface, Typeface.BOLD); setTextColor(if (active) Color.rgb(12, 17, 27) else textColor); maxLines = 2 })
+                    addView(TextView(context).apply { text = preset.description; textSize = 11f; setTextColor(if (active) Color.rgb(30, 40, 56) else mutedColor); maxLines = 3; setPadding(0, dp(4), 0, 0) })
+                    setOnClickListener { save(preset.apply(settings)); LoudnessVolumeTracker.refresh(context); rebuild() }
+                }
+                row!!.addView(tile, LinearLayout.LayoutParams(0, dp(if (wide) 108 else 116), 1f).apply { if (index % columns != columns - 1) rightMargin = dp(8) })
+            }
+            val remainder = SoundPresets.YARIS.size % columns
+            if (remainder != 0) repeat(columns - remainder) { row!!.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f).apply { rightMargin = dp(8) }) }
         }
-        fun refreshBands() {
+        body.addView(buttonFactory("More equalizer curves…") {
+            val names = EqPresets.ALL.map { it.name }
+            AlertDialog.Builder(context).setTitle("Equalizer curve (bands only)")
+                .setItems(names.toTypedArray()) { _, index ->
+                    val preset = EqPresets.ALL[index]
+                    if (settings.dspMode) save(settings.copy(dspGainsDb = preset.db.toList(), presetName = preset.name))
+                    else {
+                        val mapped = EqPresets.forBands(preset, deviceInfo.centerHz)
+                        save(settings.copy(bandLevelsMb = mapped.map { (it * 100).coerceIn(deviceInfo.minLevelMb, deviceInfo.maxLevelMb) }, presetName = preset.name))
+                    }
+                    rebuild()
+                }.show()
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(8) })
+    }
+
+    // ---- bands ---------------------------------------------------------------------------------
+
+    private fun buildBands(deviceInfo: AudioEffectSettings.Companion.BandInfo) {
+        section("Bands", "bands", hint = "Drag a column up to boost, down to cut.") { card ->
+            val bands = EqualizerBandsView(context).apply { accent = this@EqualizerPanel.accent; textColor = this@EqualizerPanel.textColor; mutedColor = this@EqualizerPanel.mutedColor }
             if (settings.dspMode) {
                 bands.minDb = EqualizerDsp.MIN_DB.toInt(); bands.maxDb = EqualizerDsp.MAX_DB.toInt()
                 bands.centersHz = EqualizerDsp.CENTER_HZ.toList()
@@ -76,190 +138,165 @@ class EqualizerPanel(
                 bands.centersHz = deviceInfo.centerHz
                 bands.levelsDb = IntArray(deviceInfo.centerHz.size) { (settings.bandLevelsMb.getOrElse(it) { 0 } / 100).coerceIn(bands.minDb, bands.maxDb) }
             }
-        }
-        refreshBands()
-        body.addView(buttonFactory("Choose preset") {
-            val names = EqPresets.ALL.map { it.name }
-            AlertDialog.Builder(context).setTitle("Equalizer preset")
-                .setItems(names.toTypedArray()) { _, index ->
-                    val preset = EqPresets.ALL[index]
-                    if (settings.dspMode) {
-                        save(settings.copy(dspGainsDb = preset.db.toList(), presetName = preset.name))
-                    } else {
-                        val mapped = EqPresets.forBands(preset, deviceInfo.centerHz)
-                        val levels = mapped.map { (it * 100).coerceIn(deviceInfo.minLevelMb, deviceInfo.maxLevelMb) }
-                        save(settings.copy(bandLevelsMb = levels, presetName = preset.name))
-                    }
-                    presetLabel.text = "Preset: ${preset.name}"
-                    refreshBands()
-                }.show()
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(4) })
-        if (settings.dspMode) {
-            body.addView(buttonFactory("Car sound presets (2018 Yaris)") {
-                val labels = SoundPresets.YARIS.map { "${it.name}\n${it.description}" }
-                AlertDialog.Builder(context).setTitle("Sound preset for the car")
-                    .setItems(labels.toTypedArray()) { _, index ->
-                        save(SoundPresets.YARIS[index].apply(settings))
-                        buildBody(body)
-                    }.show()
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(6) })
-        }
-        bands.onLevelChanged = { band, db ->
-            if (settings.dspMode) {
-                val gains = MutableList(EqualizerDsp.BANDS) { settings.dspGainsDb.getOrElse(it) { 0 } }
-                gains[band] = db
-                save(settings.copy(dspGainsDb = gains, presetName = ""))
-            } else {
-                val levels = MutableList(deviceInfo.centerHz.size) { settings.bandLevelsMb.getOrElse(it) { 0 } }
-                levels[band] = (db * 100).coerceIn(deviceInfo.minLevelMb, deviceInfo.maxLevelMb)
-                save(settings.copy(bandLevelsMb = levels, presetName = ""))
-            }
-            presetLabel.text = "Preset: Custom"
-        }
-        body.addView(bands, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230)).apply { topMargin = dp(8) })
-        body.addView(TextView(context).apply {
-            text = "Drag up to boost, down to cut. Values in dB. Large boosts on loud tracks can clip; the soft limiter (12-band mode) rounds them off."
-            textSize = 13f; setTextColor(mutedColor); setPadding(0, dp(4), 0, dp(8))
-        })
-        if (settings.dspMode) {
-            body.addView(switchFactory("Soft limiter", settings.limiter,
-                "Rounds off peaks that boosted bands push past full scale. Off keeps the signal untouched (hard clipping on very loud boosts).") { enabled ->
-                save(settings.copy(limiter = enabled))
-            })
-        }
-        if (settings.dspMode) buildAdvanced(body)
-        body.addView(sliderFactory("Bass boost (device)", (0..100 step 5).toList(), (settings.bassStrength / 10 / 5) * 5, { "$it %" }) {
-            save(settings.copy(bassStrength = it * 10))
-        })
-        body.addView(sliderFactory("Loudness boost (device)", (0..20).toList(), settings.loudnessGainMb / 100, { if (it == 0) "Off" else "+$it dB" }) {
-            save(settings.copy(loudnessGainMb = it * 100))
-        })
-        body.addView(buttonFactory("Reset equalizer") {
-            save(settings.copy(dspGainsDb = List(EqualizerDsp.BANDS) { 0 }, bandLevelsMb = List(deviceInfo.centerHz.size) { 0 },
-                bassStrength = 0, loudnessGainMb = 0, presetName = "Flat"))
-            buildBody(body)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(12) })
-    }
-
-    /** Subsonic filter, bass enhancer, auto level, air shelf and the parametric bands (12-band mode only). */
-    private fun buildAdvanced(body: LinearLayout) {
-        body.addView(TextView(context).apply {
-            text = "Sound processing"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
-        })
-        body.addView(TextView(context).apply {
-            text = "Runs in DiPlay before the car's amplifier. Each stage is free when off. Presets above set all of this at once."
-            textSize = 13f; setTextColor(mutedColor); setPadding(0, 0, 0, dp(6))
-        })
-        val subsonicSteps = listOf(0, 20, 25, 30, 35, 40, 50, 60, 80, 100, 120)
-        body.addView(sliderFactory("Subsonic filter", subsonicSteps, subsonicSteps.minByOrNull { kotlin.math.abs(it - settings.subsonicHz) } ?: 0,
-            { if (it == 0) "Off" else "$it Hz (24 dB/oct)" }) { save(settings.copy(subsonicHz = it, presetName = "")) })
-        body.addView(sliderFactory("Bass enhancer", (0..100 step 10).toList(), settings.bassEnhance / 10 * 10,
-            { if (it == 0) "Off" else "$it % · harmonics the door speakers can play" }) { save(settings.copy(bassEnhance = it, presetName = "")) })
-        val crossovers = listOf(60, 70, 80, 90, 100, 110, 120, 140, 160, 200)
-        body.addView(sliderFactory("Bass enhancer range", crossovers, crossovers.minByOrNull { kotlin.math.abs(it - settings.bassEnhanceHz) } ?: 100,
-            { "below $it Hz" }) { save(settings.copy(bassEnhanceHz = it, presetName = "")) })
-        body.addView(switchFactory("Auto level", settings.autoLevel,
-            "Slow leveler: quiet podcasts and loud tracks end up at a similar volume. Turns the soft limiter on while active.") {
-            save(settings.copy(autoLevel = it, presetName = ""))
-        })
-        body.addView(sliderFactory("Auto level strength", (0..100 step 10).toList(), settings.autoLevelAmount / 10 * 10,
-            { if (it == 0) "Off" else "$it %" }) { save(settings.copy(autoLevelAmount = it, presetName = "")) })
-        body.addView(sliderFactory("Air (high shelf)", (0..AirShelf.MAX_DB).toList(), settings.airDb.coerceIn(0, AirShelf.MAX_DB),
-            { if (it == 0) "Off" else "+$it dB · lifts the top for the dash tweeters" }) { save(settings.copy(airDb = it, presetName = "")) })
-        body.addView(sliderFactory("Air corner", AirShelf.CORNERS_HZ, AirShelf.snapCorner(settings.airHz),
-            { "above ${it / 1000} kHz" }) { save(settings.copy(airHz = it, presetName = "")) })
-        body.addView(sliderFactory("De-ess", (0..100 step 10).toList(), settings.deEss.coerceIn(0, 100) / 10 * 10,
-            { if (it == 0) "Off · air stays fixed" else "$it % · eases the air off on harsh \"s\" sounds" }) { save(settings.copy(deEss = it, presetName = "")) })
-        buildLoudness(body)
-        buildStereo(body)
-
-        body.addView(TextView(context).apply {
-            text = "Parametric EQ"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
-        })
-        body.addView(TextView(context).apply {
-            text = "Up to five bands with their own frequency, gain and width. Peak = bell around the frequency; shelves lift or cut everything below/above it."
-            textSize = 13f; setTextColor(mutedColor); setPadding(0, 0, 0, dp(4))
-        })
-        val frequencies = listOf(30, 40, 50, 60, 70, 80, 90, 100, 120, 140, 160, 180, 200, 250, 300, 350, 400, 500, 600, 700, 800, 1000, 1200, 1500, 1800, 2000, 2500, 3000, 3500, 4000, 5000, 6000, 7000, 8000, 10000, 12000, 14000, 16000)
-        val qTenths = listOf(3, 5, 7, 10, 14, 20, 30, 40, 60)
-        val gains = (-12..12).toList()
-        val current = List(EqualizerDsp.MAX_PARAMETRIC) { settings.parametric.getOrElse(it) { ParametricBand() } }
-        val shown = minOf(EqualizerDsp.MAX_PARAMETRIC, current.indexOfLast { it.type != ParametricBand.OFF } + 2)
-        fun update(index: Int, change: (ParametricBand) -> ParametricBand) {
-            val next = MutableList(EqualizerDsp.MAX_PARAMETRIC) { settings.parametric.getOrElse(it) { ParametricBand() } }
-            next[index] = change(next[index])
-            save(settings.copy(parametric = next, presetName = ""))
-        }
-        for (index in 0 until shown) {
-            val band = current[index]
-            val holder = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-            holder.addView(buttonFactory("Band ${index + 1}: ${band.describe()}  (tap to change type)") {
-                update(index) { it.copy(type = (it.type + 1) % 4) }
-                buildBody(body)
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(6) })
-            if (band.type != ParametricBand.OFF) {
-                holder.addView(sliderFactory("Frequency", frequencies, frequencies.minByOrNull { kotlin.math.abs(it - band.hz) } ?: 1000,
-                    { if (it >= 1000) "${it / 1000.0} kHz" else "$it Hz" }) { hz -> update(index) { it.copy(hz = hz) } })
-                holder.addView(sliderFactory("Gain", gains, Math.round(band.gainDb).coerceIn(-12, 12),
-                    { (if (it > 0) "+" else "") + "$it dB" }) { db -> update(index) { it.copy(gainTenths = db * 10) } })
-                if (band.type == ParametricBand.PEAK) {
-                    holder.addView(sliderFactory("Width (Q)", qTenths, qTenths.minByOrNull { kotlin.math.abs(it - band.qTenths) } ?: 10,
-                        { "Q ${it / 10.0}" + when { it <= 5 -> " · wide"; it >= 30 -> " · narrow"; else -> "" } }) { q -> update(index) { it.copy(qTenths = q) } })
+            bands.onLevelChanged = { band, db ->
+                if (settings.dspMode) {
+                    val gains = MutableList(EqualizerDsp.BANDS) { settings.dspGainsDb.getOrElse(it) { 0 } }; gains[band] = db
+                    save(settings.copy(dspGainsDb = gains, presetName = ""))
+                } else {
+                    val levels = MutableList(deviceInfo.centerHz.size) { settings.bandLevelsMb.getOrElse(it) { 0 } }
+                    levels[band] = (db * 100).coerceIn(deviceInfo.minLevelMb, deviceInfo.maxLevelMb)
+                    save(settings.copy(bandLevelsMb = levels, presetName = ""))
                 }
             }
-            body.addView(holder)
+            card.addView(bands, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(if (wide) 250 else 220)))
+            if (settings.dspMode) {
+                val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+                row.addView(buttonFactory("Flatten bands") { save(settings.copy(dspGainsDb = List(EqualizerDsp.BANDS) { 0 }, presetName = "")); rebuild() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) })
+                row.addView(buttonFactory("All bands −1 dB") { save(settings.copy(dspGainsDb = settings.dspGainsDb.map { (it - 1).coerceIn(-12, 12) }, presetName = "")); rebuild() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) })
+                row.addView(buttonFactory("All bands +1 dB") { save(settings.copy(dspGainsDb = settings.dspGainsDb.map { (it + 1).coerceIn(-12, 12) }, presetName = "")); rebuild() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+                card.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            }
         }
     }
 
-    /** Volume-linked loudness compensation: switch, amount and the reference volume step. */
-    /** Stereo stage: width, balance, driver-seat delay, crossfeed. */
-    private fun buildStereo(body: LinearLayout) {
-        body.addView(TextView(context).apply {
-            text = "Stereo stage"; textSize = 17f; setTextColor(textColor); setPadding(0, dp(14), 0, dp(2))
-        })
-        body.addView(TextView(context).apply {
-            text = "Image and seat position. Bass stays mono at any width; the driver-seat delay moves the centre of the image toward the driver by delaying the near speaker."
-            textSize = 13f; setTextColor(mutedColor); setPadding(0, 0, 0, dp(4))
-        })
-        body.addView(sliderFactory("Stereo width", (0..AudioEffectSettings.MAX_STEREO_WIDTH step 10).toList(), settings.stereoWidth.coerceIn(0, AudioEffectSettings.MAX_STEREO_WIDTH) / 10 * 10,
-            { when { it == 100 -> "100 % · as recorded"; it == 0 -> "0 % · mono"; it < 100 -> "$it % · narrower"; else -> "$it % · wider (above 200 Hz only)" } }) {
-            save(settings.copy(stereoWidth = it, presetName = ""))
-        })
-        body.addView(sliderFactory("Balance", (-AudioEffectSettings.MAX_BALANCE..AudioEffectSettings.MAX_BALANCE step 10).toList(), settings.balance.coerceIn(-100, 100) / 10 * 10,
-            { when { it == 0 -> "Centre"; it < 0 -> "${-it} % left"; else -> "$it % right" } }) { save(settings.copy(balance = it, presetName = "")) })
-        body.addView(sliderFactory("Driver-seat delay", (0..AudioEffectSettings.MAX_DRIVER_DELAY_TENTHS step 2).toList(), settings.driverSeatDelayTenthsMs.coerceIn(0, AudioEffectSettings.MAX_DRIVER_DELAY_TENTHS) / 2 * 2,
-            { if (it == 0) "Off" else "%.1f ms on the near speaker (about %d cm)".format(it / 10.0, it * 34 / 10) }) { save(settings.copy(driverSeatDelayTenthsMs = it, presetName = "")) })
-        body.addView(switchFactory("Driver sits on the right", settings.driverSide == AudioEffectSettings.DRIVER_RIGHT,
-            "Off for left-hand-drive cars. Tells the delay which speaker is nearer the driver.") {
-            save(settings.copy(driverSide = if (it) AudioEffectSettings.DRIVER_RIGHT else AudioEffectSettings.DRIVER_LEFT))
-        })
-        body.addView(sliderFactory("Crossfeed", (0..AudioEffectSettings.MAX_CROSSFEED step 10).toList(), settings.crossfeed.coerceIn(0, 100) / 10 * 10,
-            { if (it == 0) "Off" else "$it % · gentle low-frequency bleed between sides for a more natural image" }) { save(settings.copy(crossfeed = it, presetName = "")) })
+    // ---- groups --------------------------------------------------------------------------------
+
+    private fun buildBass() {
+        section("Bass", "bass", hint = "Harmonics stand in for the sub-bass the door speakers cannot play; the subsonic filter removes what only flaps the cones.") { card ->
+            card.addView(stepper("Bass enhancer", (0..100 step 10).toList(), settings.bassEnhance / 10 * 10, { if (it == 0) "Off" else "$it %" + (if (it >= 60) " · trims the real sub by ${"%.0f".format(6.0 * (it / 100.0) * (it / 100.0))} dB" else "") }) { save(settings.copy(bassEnhance = it, presetName = "")) })
+            val crossovers = listOf(60, 70, 80, 90, 100, 110, 120, 140, 160, 200)
+            card.addView(stepper("Enhancer crossover", crossovers, crossovers.minByOrNull { kotlin.math.abs(it - settings.bassEnhanceHz) } ?: 100, { "below $it Hz" }) { save(settings.copy(bassEnhanceHz = it, presetName = "")) })
+            val subsonic = listOf(0, 20, 25, 30, 35, 40, 50, 60, 80, 100, 120)
+            card.addView(stepper("Subsonic filter", subsonic, subsonic.minByOrNull { kotlin.math.abs(it - settings.subsonicHz) } ?: 0, { if (it == 0) "Off" else "cuts below $it Hz" }) { save(settings.copy(subsonicHz = it, presetName = "")) })
+            card.addView(stepper("Bass boost (device effect)", (0..100 step 10).toList(), settings.bassStrength / 10 / 10 * 10, { if (it == 0) "Off" else "$it %" }) { save(settings.copy(bassStrength = it * 10)) })
+        }
     }
 
-    private fun buildLoudness(body: LinearLayout) {
-        val detected = runCatching { LoudnessVolumeTracker.describe(context) }.getOrDefault("")
-        body.addView(switchFactory("Loudness compensation (volume-linked)", settings.loudnessComp,
-            "Keeps bass and treble full when you turn the volume down, following ISO 226 hearing curves " +
-                "(bass shelf at 100 Hz, treble shelf at 8 kHz). Works only when the car's knob is Android's media volume; " +
-                "with a hardware knob it stays neutral. Turns the soft limiter on while active." +
-                (if (detected.isNotEmpty()) "\n$detected" else "")) {
-            save(settings.copy(loudnessComp = it, presetName = ""))
-            LoudnessVolumeTracker.refresh(context)
-        })
-        body.addView(sliderFactory("Loudness amount", (0..100 step 10).toList(), settings.loudnessCompAmount / 10 * 10,
-            { if (it == 0) "Off" else "$it % · at −20 dB: bass +${"%.0f".format(6.2 * it / 100)} dB" }) {
-            save(settings.copy(loudnessCompAmount = it, presetName = ""))
-        })
-        val maxStep = runCatching { context.getSystemService(AudioManager::class.java)?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
-            .getOrNull()?.takeIf { it > 0 } ?: 15
-        val steps = (0..maxStep).toList()
-        body.addView(sliderFactory("Reference volume step", steps, settings.loudnessCompReferenceStep.coerceIn(0, maxStep),
-            { if (it == 0 || it == maxStep) "Maximum ($maxStep) · no compensation at full volume" else "Step $it of $maxStep · no compensation at or above it" }) {
-            save(settings.copy(loudnessCompReferenceStep = it))
-            LoudnessVolumeTracker.refresh(context)
-        })
+    private fun buildDynamics() {
+        section("Loudness and dynamics", "dyn") { card ->
+            card.addView(switchFactory("Auto level", settings.autoLevel, "Evens out quiet podcasts and loud tracks. Turns the limiter on while active.") { save(settings.copy(autoLevel = it, presetName = "")) })
+            card.addView(stepper("Auto level strength", (0..100 step 10).toList(), settings.autoLevelAmount / 10 * 10, { if (it == 0) "Off" else "$it %" }) { save(settings.copy(autoLevelAmount = it, presetName = "")) })
+            card.addView(switchFactory("Limiter", settings.limiter, "True-peak limiter at −0.13 dB. Keep on with boosts.") { save(settings.copy(limiter = it, presetName = "")) })
+            val detected = runCatching { LoudnessVolumeTracker.describe(context) }.getOrDefault("")
+            card.addView(switchFactory("Loudness compensation (volume-linked)", settings.loudnessComp,
+                "Fuller bass and treble when the volume is low, nothing at full volume. Needs the knob to be Android's volume." + (if (detected.isNotEmpty()) "\n$detected" else "")) {
+                save(settings.copy(loudnessComp = it, presetName = "")); LoudnessVolumeTracker.refresh(context)
+            })
+            card.addView(stepper("Loudness amount", (0..100 step 10).toList(), settings.loudnessCompAmount / 10 * 10, { if (it == 0) "Off" else "$it %" }) { save(settings.copy(loudnessCompAmount = it, presetName = "")) })
+            val maxStep = runCatching { context.getSystemService(AudioManager::class.java)?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull()?.takeIf { it > 0 } ?: 15
+            card.addView(stepper("Reference volume step", (0..maxStep).toList(), settings.loudnessCompReferenceStep.coerceIn(0, maxStep),
+                { if (it == 0 || it == maxStep) "Maximum ($maxStep)" else "$it of $maxStep" }) { save(settings.copy(loudnessCompReferenceStep = it)); LoudnessVolumeTracker.refresh(context) })
+            card.addView(stepper("Loudness boost (device effect)", (0..20).toList(), settings.loudnessGainMb / 100, { if (it == 0) "Off" else "+$it dB" }) { save(settings.copy(loudnessGainMb = it * 100)) })
+        }
     }
+
+    private fun buildTone() {
+        section("Tone", "tone", hint = "Air lifts the top for the dash tweeters; de-ess backs it off on harsh \"s\" sounds.") { card ->
+            card.addView(stepper("Air (high shelf)", (0..AirShelf.MAX_DB).toList(), settings.airDb.coerceIn(0, AirShelf.MAX_DB), { if (it == 0) "Off" else "+$it dB" }) { save(settings.copy(airDb = it, presetName = "")) })
+            card.addView(stepper("Air corner", AirShelf.CORNERS_HZ, AirShelf.snapCorner(settings.airHz), { "above ${it / 1000} kHz" }) { save(settings.copy(airHz = it, presetName = "")) })
+            card.addView(stepper("De-ess", (0..100 step 10).toList(), settings.deEss.coerceIn(0, 100) / 10 * 10, { if (it == 0) "Off" else "$it %" }) { save(settings.copy(deEss = it, presetName = "")) })
+        }
+    }
+
+    private fun buildStereo() {
+        section("Stereo", "stereo", hint = "Bass stays mono at any width. The driver-seat delay centres the image on the driver.") { card ->
+            card.addView(stepper("Width", (0..AudioEffectSettings.MAX_STEREO_WIDTH step 10).toList(), settings.stereoWidth.coerceIn(0, AudioEffectSettings.MAX_STEREO_WIDTH) / 10 * 10,
+                { when { it == 100 -> "100 % · as recorded"; it == 0 -> "mono"; it < 100 -> "$it % · narrower"; else -> "$it % · wider" } }) { save(settings.copy(stereoWidth = it, presetName = "")) })
+            card.addView(stepper("Balance", (-AudioEffectSettings.MAX_BALANCE..AudioEffectSettings.MAX_BALANCE step 10).toList(), settings.balance.coerceIn(-100, 100) / 10 * 10,
+                { when { it == 0 -> "Centre"; it < 0 -> "${-it} % left"; else -> "$it % right" } }) { save(settings.copy(balance = it, presetName = "")) })
+            card.addView(stepper("Driver-seat delay", (0..AudioEffectSettings.MAX_DRIVER_DELAY_TENTHS step 2).toList(), settings.driverSeatDelayTenthsMs.coerceIn(0, AudioEffectSettings.MAX_DRIVER_DELAY_TENTHS) / 2 * 2,
+                { if (it == 0) "Off" else "%.1f ms (≈%d cm)".format(it / 10.0, it * 34 / 10) }) { save(settings.copy(driverSeatDelayTenthsMs = it, presetName = "")) })
+            card.addView(switchFactory("Driver sits on the right", settings.driverSide == AudioEffectSettings.DRIVER_RIGHT, "Off for left-hand-drive cars.") {
+                save(settings.copy(driverSide = if (it) AudioEffectSettings.DRIVER_RIGHT else AudioEffectSettings.DRIVER_LEFT))
+            })
+            card.addView(stepper("Crossfeed", (0..AudioEffectSettings.MAX_CROSSFEED step 10).toList(), settings.crossfeed.coerceIn(0, 100) / 10 * 10, { if (it == 0) "Off" else "$it %" }) { save(settings.copy(crossfeed = it, presetName = "")) })
+        }
+    }
+
+    private fun buildParametric() {
+        section("Parametric EQ", "param", hint = "Up to five bands with their own frequency, gain and width. Tap a band to change its type.") { card ->
+            val frequencies = listOf(30, 40, 50, 60, 70, 80, 90, 100, 120, 140, 160, 180, 200, 250, 300, 350, 400, 500, 600, 700, 800, 1000, 1200, 1500, 1800, 2000, 2500, 3000, 3500, 4000, 5000, 6000, 7000, 8000, 10000, 12000, 14000, 16000)
+            val qTenths = listOf(3, 5, 7, 10, 14, 20, 30, 40, 60)
+            val current = List(EqualizerDsp.MAX_PARAMETRIC) { settings.parametric.getOrElse(it) { ParametricBand() } }
+            val shown = minOf(EqualizerDsp.MAX_PARAMETRIC, current.indexOfLast { it.type != ParametricBand.OFF } + 2)
+            fun update(index: Int, change: (ParametricBand) -> ParametricBand) {
+                val next = MutableList(EqualizerDsp.MAX_PARAMETRIC) { settings.parametric.getOrElse(it) { ParametricBand() } }
+                next[index] = change(next[index])
+                save(settings.copy(parametric = next, presetName = ""))
+            }
+            for (index in 0 until shown) {
+                val band = current[index]
+                card.addView(buttonFactory("Band ${index + 1}: ${band.describe()}") { update(index) { it.copy(type = (it.type + 1) % 4) }; rebuild() },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)).apply { topMargin = dp(6) })
+                if (band.type != ParametricBand.OFF) {
+                    card.addView(stepper("Frequency", frequencies, frequencies.minByOrNull { kotlin.math.abs(it - band.hz) } ?: 1000, { if (it >= 1000) "${it / 1000.0} kHz" else "$it Hz" }) { hz -> update(index) { it.copy(hz = hz) } })
+                    card.addView(stepper("Gain", (-12..12).toList(), Math.round(band.gainDb).coerceIn(-12, 12), { (if (it > 0) "+" else "") + "$it dB" }) { db -> update(index) { it.copy(gainTenths = db * 10) } })
+                    if (band.type == ParametricBand.PEAK) card.addView(stepper("Width (Q)", qTenths, qTenths.minByOrNull { kotlin.math.abs(it - band.qTenths) } ?: 10, { "Q ${it / 10.0}" }) { q -> update(index) { it.copy(qTenths = q) } })
+                }
+            }
+        }
+    }
+
+    // ---- widgets -------------------------------------------------------------------------------
+
+    private fun heading(title: String, subtitle: String?): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(0, dp(16), 0, dp(2))
+        addView(TextView(context).apply { text = title; textSize = 20f; setTypeface(typeface, Typeface.BOLD); setTextColor(textColor) })
+        if (subtitle != null) addView(TextView(context).apply { text = subtitle; textSize = 13f; setTextColor(mutedColor) })
+    }
+
+    /** A collapsible group with a big header; open/closed state survives rebuilds and reopenings. */
+    private fun section(title: String, key: String, hint: String? = null, build: (LinearLayout) -> Unit) {
+        val open = expanded[key] ?: (key == "bands")
+        val header = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = rounded(Color.argb(28, 255, 255, 255), Color.argb(50, 255, 255, 255)); setPadding(dp(16), dp(14), dp(16), dp(14))
+            isClickable = true; isFocusable = true
+        }
+        header.addView(TextView(context).apply { text = title; textSize = 19f; setTypeface(typeface, Typeface.BOLD); setTextColor(textColor) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val chevron = TextView(context).apply { text = if (open) "▾" else "▸"; textSize = 22f; setTextColor(accent) }
+        header.addView(chevron)
+        body.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)).apply { topMargin = dp(12) })
+        val card = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(6), dp(4), dp(6)); visibility = if (open) View.VISIBLE else View.GONE }
+        if (hint != null) card.addView(TextView(context).apply { text = hint; textSize = 13f; setTextColor(mutedColor); setPadding(0, 0, 0, dp(4)) })
+        build(card)
+        body.addView(card)
+        header.setOnClickListener {
+            val now = card.visibility != View.VISIBLE
+            expanded[key] = now
+            card.visibility = if (now) View.VISIBLE else View.GONE
+            chevron.text = if (now) "▾" else "▸"
+        }
+    }
+
+    /** Title and value on the left, big −/+ buttons on the right: no dragging needed. */
+    private fun stepper(title: String, values: List<Int>, current: Int, describe: (Int) -> String, onChange: (Int) -> Unit): View {
+        var index = values.indexOf(current).let { if (it < 0) values.indexOfFirst { v -> v >= current }.coerceAtLeast(0) else it }
+        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(6)) }
+        val text = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val titleView = TextView(context).apply { this.text = title; textSize = 16f; setTextColor(textColor) }
+        val valueView = TextView(context).apply { this.text = describe(values[index]); textSize = 14f; setTextColor(accent) }
+        text.addView(titleView); text.addView(valueView)
+        row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        fun button(glyph: String, delta: Int) = TextView(context).apply {
+            this.text = glyph; textSize = 26f; gravity = Gravity.CENTER; setTextColor(textColor)
+            background = rounded(Color.argb(40, 255, 255, 255), Color.argb(70, 255, 255, 255)); isClickable = true; isFocusable = true
+            setOnClickListener {
+                val next = (index + delta).coerceIn(0, values.size - 1)
+                if (next != index) { index = next; valueView.text = describe(values[index]); onChange(values[index]) }
+            }
+        }
+        row.addView(button("−", -1), LinearLayout.LayoutParams(dp(64), dp(52)).apply { rightMargin = dp(8) })
+        row.addView(button("+", +1), LinearLayout.LayoutParams(dp(64), dp(52)))
+        return row
+    }
+
+    private fun rounded(fill: Int, stroke: Int) = GradientDrawable().apply { setColor(fill); cornerRadius = dp(14).toFloat(); setStroke(dp(1), stroke) }
 
     private fun LinearLayout.addView(view: View, params: LinearLayout.LayoutParams) = (this as ViewGroup).addView(view, params)
+
+    companion object {
+        /** Open/closed state of the groups, shared across panel instances. */
+        private val expanded = HashMap<String, Boolean>()
+    }
 }
