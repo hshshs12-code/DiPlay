@@ -81,6 +81,7 @@ object Iap2IpodMessages {
     const val ACCESSORY_HID_REPORT = 0x6802
     const val STOP_HID = 0x6803
     const val REQUEST_APP_LAUNCH = 0xea02
+    const val IDENTIFICATION_INFORMATION_UPDATE = 0x1d05
 
     const val USB_TRANSPORT_COMPONENT_ID = 1
     const val HID_COMPONENT_ID = 2
@@ -109,9 +110,12 @@ object Iap2IpodMessages {
         val usbAudioStop: Boolean = usbAudio,
         /** Declare every sample rate the enum knows (8–48 kHz) instead of the required three. */
         val allSampleRates: Boolean = false,
+        /** Also declare the identification messages themselves (control-session version 2 rule in newer specs). */
+        val declareIdentification: Boolean = false,
     ) {
         fun describe(): String = listOfNotNull(
             when { !usbAudio -> "no USB-audio request"; !usbAudioInfo -> "USB-audio start only"; !usbAudioStop -> "USB-audio without stop"; allSampleRates -> "all sample rates"; else -> null },
+            if (declareIdentification) "identification messages declared" else null,
             if (hid) null else "no media remote", if (appLaunch) null else "no app launch",
             if (setNowPlaying) null else "no seek/shuffle", if (power) null else "no power updates",
         ).joinToString(", ").ifEmpty { "full" }
@@ -122,23 +126,25 @@ object Iap2IpodMessages {
      * group, so levels 1–2 bisect that group first; the later levels cover the other groups and
      * end with the message set the fork's wired CarPlay identification is accepted with.
      */
-    const val MAX_LEVEL = 9
+    const val MAX_LEVEL = 10
     fun capabilities(level: Int): Capabilities = when (level.coerceIn(0, MAX_LEVEL)) {
         0 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true)
         1 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, allSampleRates = true)
-        2 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioStop = false)
-        3 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioInfo = false, usbAudioStop = false)
-        4 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudio = false)
-        5 -> Capabilities(hid = false, appLaunch = true, setNowPlaying = true, power = true)
-        6 -> Capabilities(hid = true, appLaunch = false, setNowPlaying = false, power = true)
-        7 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = false)
-        8 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = true, usbAudio = false)
+        2 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, declareIdentification = true)
+        3 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioStop = false)
+        4 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioInfo = false, usbAudioStop = false)
+        5 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudio = false)
+        6 -> Capabilities(hid = false, appLaunch = true, setNowPlaying = true, power = true)
+        7 -> Capabilities(hid = true, appLaunch = false, setNowPlaying = false, power = true)
+        8 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = false)
+        9 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = true, usbAudio = false)
         else -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = false, usbAudio = false)
     }
 
     fun messagesSent(level: Int): IntArray {
         val c = capabilities(level)
         val list = mutableListOf(AUTHENTICATION_CERTIFICATE, AUTHENTICATION_RESPONSE, START_NOW_PLAYING_UPDATES, STOP_NOW_PLAYING_UPDATES)
+        if (c.declareIdentification) list.addAll(0, listOf(IDENTIFICATION_INFORMATION, IDENTIFICATION_INFORMATION_UPDATE))
         if (c.usbAudio) list += START_USB_DEVICE_MODE_AUDIO
         if (c.usbAudio && c.usbAudioStop) list += STOP_USB_DEVICE_MODE_AUDIO
         if (c.power) list += listOf(START_POWER_UPDATES, STOP_POWER_UPDATES, POWER_SOURCE_UPDATE)
@@ -152,6 +158,7 @@ object Iap2IpodMessages {
         val c = capabilities(level)
         val list = mutableListOf(REQUEST_AUTHENTICATION_CERTIFICATE, REQUEST_AUTHENTICATION_CHALLENGE_RESPONSE,
             AUTHENTICATION_FAILED, AUTHENTICATION_SUCCEEDED, NOW_PLAYING_UPDATE)
+        if (c.declareIdentification) list.addAll(0, listOf(START_IDENTIFICATION, IDENTIFICATION_ACCEPTED, IDENTIFICATION_REJECTED))
         if (c.usbAudio && c.usbAudioInfo) list += USB_DEVICE_MODE_AUDIO_INFORMATION
         if (c.power) list += POWER_UPDATE
         if (c.hid) list += DEVICE_HID_REPORT

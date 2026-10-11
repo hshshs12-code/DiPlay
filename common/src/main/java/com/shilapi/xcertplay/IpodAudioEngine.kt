@@ -221,7 +221,7 @@ object IpodAudioEngine {
                                 identified = true; authenticated = true
                                 capabilities = client?.capabilities ?: capabilities
                                 set(app, State.READY, "Connected${if (capabilities.hid) "" else " (limited: ${capabilities.describe()})"}. Waiting for the iPhone to start USB audio…")
-                                scheduleAudioFallback(app)
+                                if (!capabilities.usbAudio) scheduleAudioFallback(app)
                             }
                         }
                     }
@@ -232,6 +232,12 @@ object IpodAudioEngine {
                         notifyListeners()
                     }
                     override fun onAudioSampleRate(rateHz: Int) = startAudio(app, rateHz, fallback = false)
+                    override fun onBeforeAudioRequest() {
+                        // Select the streaming alternate and set a rate before 0xDA00 goes out; the
+                        // phone's 0xDA01 answer re-opens capture if it picks another rate.
+                        startAudio(app, 44_100, fallback = false, quiet = true)
+                        audio?.awaitOpened(1_500)
+                    }
                     override fun onPower(state: IpodPowerState) { power = state; notifyListeners() }
                 })
                 client = ipod
@@ -275,12 +281,16 @@ object IpodAudioEngine {
     }
 
     @Synchronized
-    private fun startAudio(app: Context, rateHz: Int, fallback: Boolean) {
+    private fun startAudio(app: Context, rateHz: Int, fallback: Boolean, quiet: Boolean = false) {
         val current = audio
-        if (current != null && current.rateHz == rateHz) return
+        if (current != null && current.rateHz == rateHz) {
+            if (!quiet) set(app, State.READY, "Connected · iPhone streaming USB audio at ${rateHz / 1000.0} kHz")
+            return
+        }
         current?.stop()
         audio = CaptureLoop(app, rateHz).also { it.start() }
-        set(app, State.READY, if (fallback) "Connected · capturing at ${rateHz / 1000.0} kHz" else "Connected · iPhone streaming USB audio at ${rateHz / 1000.0} kHz")
+        if (!quiet) set(app, State.READY, if (fallback) "Connected · capturing at ${rateHz / 1000.0} kHz" else "Connected · iPhone streaming USB audio at ${rateHz / 1000.0} kHz")
+        else log(app, "audio interface prepared at ${rateHz / 1000.0} kHz ahead of the USB-audio request")
     }
 
     private fun trace(app: Context, line: String) {
@@ -338,8 +348,11 @@ object IpodAudioEngine {
 
     private class CaptureLoop(private val app: Context, val rateHz: Int) {
         private val active = AtomicBoolean(true)
+        private val opened = java.util.concurrent.CountDownLatch(1)
         private val thread = Thread(::run, "diplay-ipod-audio").apply { isDaemon = true }
         fun start() = thread.start()
+        /** Waits until the USB audio interface has been selected (or the attempt gave up). */
+        fun awaitOpened(timeoutMillis: Long) = runCatching { opened.await(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrDefault(false)
         fun stop() { active.set(false); thread.interrupt(); runCatching { thread.join(1_500) } }
 
         private fun run() {
@@ -352,11 +365,13 @@ object IpodAudioEngine {
         private fun capture() {
             val context = direct
             if (context != null && IpodSettings.directUsbAudio(app) && context.alternates.isNotEmpty()) {
-                val opened = runCatching {
+                val source = runCatching {
                     UsbIsoAudioCapture.open(context.connection, context.interfaces, context.alternates, rateHz) { log(app, it) }
                 }.onFailure { log(app, "direct usb audio unavailable: ${it.message}; falling back to Android capture") }.getOrNull()
-                if (opened != null) { captureDirect(opened); return }
+                opened.countDown()
+                if (source != null) { captureDirect(source); return }
             }
+            opened.countDown()
             captureAndroid()
         }
 

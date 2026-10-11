@@ -39,7 +39,19 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.31)
+## Fork features (0.2.13-legacy24.32)
+
+24.32: audio request sequencing and richer rejection logging
+- IdentificationRejected parameters are logged with length and raw hex
+  (they may carry the offending message IDs, not just the parameter number).
+- The UAC streaming alternate is selected and a rate set before
+  StartUSBDeviceModeAudio is sent (real hosts have the audio interface active
+  first); the phone's USBDeviceModeAudioInformation re-opens capture at the
+  announced rate. The blind 6 s capture fallback now only applies when the
+  audio request could not be declared.
+- Ladder level 2 additionally declares the identification messages
+  themselves (1D01/1D05 sent, 1D00/1D02/1D03 received), the control-session
+  version 2 rule from newer specification revisions.
 
 24.31: required sample rates + Now Playing redesign
 - Fourth on-car report (24.30, iPhone 16 Pro Max, USB-C): the phone rejects

@@ -30,6 +30,8 @@ class Iap2IpodClient(
         fun onStage(stage: Stage)
         fun onNowPlaying(update: CarPlayNowPlaying, shuffle: Int?, repeat: Int?)
         fun onAudioSampleRate(rateHz: Int)
+        /** Called right before StartUSBDeviceModeAudio is sent: select the audio alternate setting now. */
+        fun onBeforeAudioRequest()
         fun onPower(state: IpodPowerState)
     }
 
@@ -116,7 +118,10 @@ class Iap2IpodClient(
                 maybeReady()
             }
             Iap2IpodMessages.IDENTIFICATION_REJECTED -> {
-                val ids = runCatching { Iap2BodyReader.of(frame).list().map { "0x${it.id.toString(16)}" } }.getOrDefault(emptyList())
+                // The rejection parameters can carry the offending message IDs; log their raw contents.
+                val ids = runCatching {
+                    Iap2BodyReader.of(frame).list().map { p -> "0x${p.id.toString(16)}(len=${p.payload.size}${if (p.payload.isNotEmpty()) " hex=" + p.payload.joinToString("") { "%02x".format(it.toInt() and 0xff) } else ""})" }
+                }.getOrDefault(emptyList())
                 if (level >= Iap2IpodMessages.MAX_LEVEL) {
                     throw IphoneUsbException.Protocol("The iPhone rejected every accessory identification profile (last rejected parameters $ids)")
                 }
@@ -174,7 +179,11 @@ class Iap2IpodClient(
         if (c.power) { send(Iap2IpodMessages.powerSourceUpdate(config)); send(Iap2IpodMessages.startPowerUpdates()) }
         send(Iap2IpodMessages.startNowPlayingUpdates())
         if (c.hid) send(Iap2IpodMessages.startHid())
-        if (c.usbAudio) send(Iap2IpodMessages.startUsbDeviceModeAudio())
+        if (c.usbAudio) {
+            // Real hosts have the UAC streaming interface active before they ask for audio.
+            runCatching { listener.onBeforeAudioRequest() }
+            send(Iap2IpodMessages.startUsbDeviceModeAudio())
+        }
         listener.onProgress("iap2 ready level=$level (${c.describe()}): sent ${if (c.power) "ae03 power ${config.availableCurrentMilliAmps}mA, ae00, " else ""}5000 now playing${if (c.hid) ", 6800 media remote" else ""}${if (c.usbAudio) ", da00 start usb audio" else " (no USB-audio request accepted: relying on the phone routing audio to USB by itself)"}")
         listener.onStage(Stage.READY)
     }
