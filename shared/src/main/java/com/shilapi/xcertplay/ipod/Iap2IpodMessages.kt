@@ -13,8 +13,13 @@ data class Iap2IpodConfig(
     val serialNumber: String,
     val firmwareVersion: String,
     val hardwareVersion: String,
-    /** Sample rates the head unit can capture; the phone picks one and reports it in 0xDA01. */
-    val sampleRates: List<Int> = listOf(44_100, 48_000),
+    /**
+     * Sample rates the head unit can capture; the phone picks one and reports it in 0xDA01. The
+     * MFi specification requires USB-device-mode-audio accessories to offer at least 32, 44.1 and
+     * 48 kHz; without all three the iPhone treats the audio feature as unsupported and rejects
+     * StartUSBDeviceModeAudio in the identification message lists.
+     */
+    val sampleRates: List<Int> = REQUIRED_SAMPLE_RATES,
     /** Current the USB port can supply; announced with PowerSourceUpdate after authentication. */
     val availableCurrentMilliAmps: Int = 1_000,
     val language: String = "en",
@@ -28,6 +33,9 @@ data class Iap2IpodConfig(
 }
 
 /** Power state the iPhone reports through PowerUpdate (0xAE01). */
+/** Minimum set the specification demands for USB device-mode audio. */
+val REQUIRED_SAMPLE_RATES: List<Int> = listOf(32_000, 44_100, 48_000)
+
 data class IpodPowerState(
     val chargingState: Int? = null,          // 0 disconnected, 1 charging, 2 charged
     val batteryLevelPercent: Int? = null,
@@ -99,9 +107,11 @@ object Iap2IpodMessages {
         val usbAudioInfo: Boolean = usbAudio,
         /** StopUSBDeviceModeAudio declared. */
         val usbAudioStop: Boolean = usbAudio,
+        /** Declare every sample rate the enum knows (8–48 kHz) instead of the required three. */
+        val allSampleRates: Boolean = false,
     ) {
         fun describe(): String = listOfNotNull(
-            when { !usbAudio -> "no USB-audio request"; !usbAudioInfo -> "USB-audio start only"; !usbAudioStop -> "USB-audio without stop"; else -> null },
+            when { !usbAudio -> "no USB-audio request"; !usbAudioInfo -> "USB-audio start only"; !usbAudioStop -> "USB-audio without stop"; allSampleRates -> "all sample rates"; else -> null },
             if (hid) null else "no media remote", if (appLaunch) null else "no app launch",
             if (setNowPlaying) null else "no seek/shuffle", if (power) null else "no power updates",
         ).joinToString(", ").ifEmpty { "full" }
@@ -112,16 +122,17 @@ object Iap2IpodMessages {
      * group, so levels 1–2 bisect that group first; the later levels cover the other groups and
      * end with the message set the fork's wired CarPlay identification is accepted with.
      */
-    const val MAX_LEVEL = 8
+    const val MAX_LEVEL = 9
     fun capabilities(level: Int): Capabilities = when (level.coerceIn(0, MAX_LEVEL)) {
         0 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true)
-        1 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioStop = false)
-        2 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioInfo = false, usbAudioStop = false)
-        3 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudio = false)
-        4 -> Capabilities(hid = false, appLaunch = true, setNowPlaying = true, power = true)
-        5 -> Capabilities(hid = true, appLaunch = false, setNowPlaying = false, power = true)
-        6 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = false)
-        7 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = true, usbAudio = false)
+        1 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, allSampleRates = true)
+        2 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioStop = false)
+        3 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudioInfo = false, usbAudioStop = false)
+        4 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = true, usbAudio = false)
+        5 -> Capabilities(hid = false, appLaunch = true, setNowPlaying = true, power = true)
+        6 -> Capabilities(hid = true, appLaunch = false, setNowPlaying = false, power = true)
+        7 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = false)
+        8 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = true, usbAudio = false)
         else -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = false, usbAudio = false)
     }
 
@@ -149,7 +160,8 @@ object Iap2IpodMessages {
 
     /** One line with the declared message IDs, for the diagnostic log (payload lines are redacted from uploads). */
     fun describeLists(level: Int): String =
-        "sent=[" + messagesSent(level).joinToString(",") { it.toString(16) } + "] received=[" + messagesReceived(level).joinToString(",") { it.toString(16) } + "]"
+        "sent=[" + messagesSent(level).joinToString(",") { it.toString(16) } + "] received=[" + messagesReceived(level).joinToString(",") { it.toString(16) } + "]" +
+            " rates=" + (if (capabilities(level).allSampleRates) "all" else REQUIRED_SAMPLE_RATES.joinToString("/"))
 
     /** Level-0 lists, kept for callers that want the full set. */
     val MESSAGES_SENT: IntArray get() = messagesSent(0)
@@ -198,7 +210,8 @@ object Iap2IpodMessages {
             u16(0, USB_TRANSPORT_COMPONENT_ID)
             string(1, "USB")
             void(2) // TransportSupportsiAP2Connection
-            config.sampleRates.forEach { u8(3, SAMPLE_RATE_CODES.getValue(it)) }
+            val rates = if (c.allSampleRates) SAMPLE_RATE_CODES.keys.sorted() else (config.sampleRates + REQUIRED_SAMPLE_RATES).distinct().sorted()
+            rates.forEach { u8(3, SAMPLE_RATE_CODES.getValue(it)) }
         }
         if (c.hid) group(18) { // iAP2HIDComponent
             u16(0, HID_COMPONENT_ID)

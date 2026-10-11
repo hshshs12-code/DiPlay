@@ -39,7 +39,20 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.30)
+## Fork features (0.2.13-legacy24.31)
+
+24.31: required sample rates + Now Playing redesign
+- Fourth on-car report (24.30, iPhone 16 Pro Max, USB-C): the phone rejects
+  0xDA00 in the sent list and 0xDA01 in the received list individually, so
+  the message IDs are not the issue; it treats USB device-mode audio as
+  unsupported by this accessory. The MFi specification requires accessories
+  using USB device-mode audio to offer at least 32, 44.1 and 48 kHz; DiPlay
+  offered only 44.1 and 48. The USBDeviceTransportComponent now declares all
+  three (and level 1 of the ladder declares every enum rate as a hedge).
+- iPod Now Playing screen redesigned: large rounded artwork with a blurred
+  backdrop and a colour wash from the cover, large type, scrubber with
+  elapsed/remaining, deck-style transport row, Siri/app chips; settings,
+  meter and log moved to a bottom sheet behind the gear.
 
 24.30: iPod mode accepted on the car; bisecting the USB-audio request
 - Third on-car report (24.29): level 1 (everything except the USB-device-mode
