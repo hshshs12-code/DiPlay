@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbManager
@@ -17,39 +19,51 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
-/** iPod audio over USB: the iPhone as a native USB music source, with Now Playing and controls. */
+/**
+ * iPod audio over USB: a Now Playing screen in the spirit of an OEM or Apple layout. Large
+ * artwork, a colour wash taken from the art, few words, big controls. Everything secondary lives
+ * behind the gear button.
+ */
 class IpodModeActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var statusView: TextView
-    private lateinit var detailView: TextView
-    private lateinit var meter: ProgressBar
-    private lateinit var startStop: Button
+    private lateinit var backdrop: ImageView
+    private lateinit var wash: View
+    private lateinit var statusPill: TextView
     private lateinit var artworkView: ImageView
     private lateinit var titleView: TextView
     private lateinit var artistView: TextView
     private lateinit var albumView: TextView
-    private lateinit var appView: TextView
+    private lateinit var sourceView: TextView
     private lateinit var progress: SeekBar
     private lateinit var elapsedView: TextView
-    private lateinit var durationView: TextView
-    private lateinit var playPause: Button
-    private lateinit var shuffleButton: Button
-    private lateinit var repeatButton: Button
-    private lateinit var batteryView: TextView
+    private lateinit var remainingView: TextView
+    private lateinit var controls: LinearLayout
+    private lateinit var playPause: TextView
+    private lateinit var shuffleButton: TextView
+    private lateinit var repeatButton: TextView
+    private lateinit var chips: LinearLayout
+    private lateinit var startButton: TextView
+    private lateinit var footer: TextView
+    private lateinit var sheet: FrameLayout
+    private lateinit var sheetBody: LinearLayout
+    private lateinit var meter: android.widget.ProgressBar
     private lateinit var logView: TextView
+    private lateinit var sheetStartStop: TextView
     private var seeking = false
     private var shownArtwork: Any? = null
+    private var washColor = 0
     private val refresh = object : Runnable {
         override fun run() { render(); handler.postDelayed(this, 250) }
     }
@@ -59,39 +73,58 @@ class IpodModeActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.statusBarColor = BG; window.navigationBarColor = BG
-        val root = ScrollView(this).apply { setBackgroundColor(BG) }
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(14), dp(20), dp(20)) }
-        root.addView(content)
-        setContentView(root)
         val wide = resources.configuration.screenWidthDp >= 700
+        val root = FrameLayout(this).apply { setBackgroundColor(BG) }
+        setContentView(root)
 
-        // Header: title + live status.
-        val header = row().apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(label("iPod audio over USB", 24, TEXT, true), LinearLayout.LayoutParams(0, -2, 1f))
-        statusView = label("Idle", 14, MUTED).apply { gravity = Gravity.END }
-        header.addView(statusView, LinearLayout.LayoutParams(0, -2, 1f))
-        content.addView(header)
+        // Backdrop: the artwork, heavily downscaled so it reads as a soft colour field.
+        backdrop = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
+        root.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
+        wash = View(this)
+        root.addView(wash, FrameLayout.LayoutParams(-1, -1))
+        applyWash(BG)
 
-        // Now playing card.
-        val playing = card()
-        val body = if (wide) row() else column()
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(28), dp(16), dp(28), dp(16)) }
+        root.addView(content, FrameLayout.LayoutParams(-1, -1))
+
+        // Top bar: home, title, status, settings.
+        val top = row().apply { gravity = Gravity.CENTER_VERTICAL }
+        top.addView(glyphButton("‹", 30) { finish() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        top.addView(label("iPod", 18, TEXT, true).apply { setPadding(dp(4), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+        statusPill = label("Idle", 13, MUTED).apply {
+            background = rounded(Color.argb(60, 255, 255, 255), Color.TRANSPARENT, 14); setPadding(dp(12), dp(6), dp(12), dp(6))
+        }
+        top.addView(statusPill)
+        top.addView(glyphButton("⚙", 24) { toggleSheet() }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { leftMargin = dp(8) })
+        content.addView(top)
+
+        // Main: artwork + text/controls.
+        val main = if (wide) row().apply { gravity = Gravity.CENTER_VERTICAL } else column().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        val artSize = if (wide) dp(330) else dp(220)
         artworkView = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            background = rounded(Color.rgb(30, 41, 59), BORDER)
             setImageResource(com.shilapi.xcertplay.host.R.drawable.art_now_playing_placeholder)
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) { outline.setRoundRect(0, 0, view.width, view.height, dp(22).toFloat()) }
+            }
             clipToOutline = true
+            elevation = dp(18).toFloat()
         }
-        val artSize = if (wide) dp(210) else dp(160)
-        body.addView(artworkView, LinearLayout.LayoutParams(artSize, artSize).apply { if (wide) rightMargin = dp(20) else bottomMargin = dp(12) })
-        val text = column()
-        titleView = label("Nothing playing", 26, TEXT, true).apply { maxLines = 2 }
-        artistView = label("Play something on the iPhone; it shows up here.", 18, TEXT).apply { maxLines = 1 }
-        albumView = label("", 14, MUTED).apply { maxLines = 1 }
-        appView = label("", 12, MUTED)
-        text.addView(titleView); text.addView(artistView); text.addView(albumView); text.addView(appView.apply { setPadding(0, dp(2), 0, dp(8)) })
+        main.addView(artworkView, LinearLayout.LayoutParams(artSize, artSize).apply { if (wide) rightMargin = dp(40) else bottomMargin = dp(16) })
+
+        val text = column().apply { gravity = if (wide) Gravity.START else Gravity.CENTER_HORIZONTAL }
+        titleView = label("", 32, TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; if (!wide) gravity = Gravity.CENTER }
+        artistView = label("", 21, TEXT).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; alpha = 0.92f; if (!wide) gravity = Gravity.CENTER }
+        albumView = label("", 16, MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; if (!wide) gravity = Gravity.CENTER }
+        sourceView = label("", 13, MUTED).apply { if (!wide) gravity = Gravity.CENTER }
+        text.addView(titleView); text.addView(artistView.apply { setPadding(0, dp(4), 0, 0) }); text.addView(albumView.apply { setPadding(0, dp(2), 0, 0) })
+        text.addView(sourceView.apply { setPadding(0, dp(6), 0, dp(10)) })
+
         progress = SeekBar(this).apply {
             max = 1000
-            progressTintList = ColorStateList.valueOf(ACCENT); thumbTintList = ColorStateList.valueOf(ACCENT)
+            progressTintList = ColorStateList.valueOf(TEXT); progressBackgroundTintList = ColorStateList.valueOf(Color.argb(70, 255, 255, 255))
+            thumbTintList = ColorStateList.valueOf(TEXT)
+            setPadding(0, 0, 0, 0)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(bar: SeekBar, p: Int, fromUser: Boolean) { if (fromUser) elapsedView.text = clock(IpodAudioEngine.nowPlaying.durationMillis?.let { it * p / 1000 }) }
                 override fun onStartTrackingTouch(bar: SeekBar) { seeking = true }
@@ -101,50 +134,75 @@ class IpodModeActivity : Activity() {
                 }
             })
         }
-        text.addView(progress, LinearLayout.LayoutParams(-1, dp(36)))
+        text.addView(progress, LinearLayout.LayoutParams(-1, dp(28)))
         val times = row()
-        elapsedView = label("0:00", 12, MUTED); durationView = label("0:00", 12, MUTED).apply { gravity = Gravity.END }
-        times.addView(elapsedView, LinearLayout.LayoutParams(0, -2, 1f)); times.addView(durationView, LinearLayout.LayoutParams(0, -2, 1f))
+        elapsedView = label("0:00", 12, MUTED); remainingView = label("-0:00", 12, MUTED).apply { gravity = Gravity.END }
+        times.addView(elapsedView, LinearLayout.LayoutParams(0, -2, 1f)); times.addView(remainingView, LinearLayout.LayoutParams(0, -2, 1f))
         text.addView(times)
-        val controls = row().apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(8), 0, 0) }
-        shuffleButton = control("Shuffle", false) { IpodAudioEngine.toggleShuffle() }
-        repeatButton = control("Repeat", false) { IpodAudioEngine.cycleRepeat() }
-        playPause = control("▶", true) { IpodAudioEngine.playPause() }.apply { textSize = 26f }
-        controls.addView(shuffleButton, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(6) })
-        controls.addView(control("⏮", false) { IpodAudioEngine.previous() }.apply { textSize = 24f }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(6) })
-        controls.addView(playPause, LinearLayout.LayoutParams(0, dp(60), 1.4f).apply { rightMargin = dp(6) })
-        controls.addView(control("⏭", false) { IpodAudioEngine.next() }.apply { textSize = 24f }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(6) })
-        controls.addView(repeatButton, LinearLayout.LayoutParams(0, dp(52), 1f))
-        text.addView(controls)
-        val apps = row().apply { setPadding(0, dp(10), 0, 0) }
-        apps.addView(control("Siri", false) { IpodAudioEngine.siri() }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
-        listOf("Music" to "com.apple.Music", "Podcasts" to "com.apple.podcasts", "Spotify" to "com.spotify.client", "YT Music" to "com.google.ios.youtubemusic").forEachIndexed { index, (name, bundle) ->
-            apps.addView(control(name, false) { IpodAudioEngine.launchApp(bundle); toast("Opening $name on the iPhone") }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { if (index < 3) rightMargin = dp(6) })
+
+        controls = row().apply { gravity = Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL; setPadding(0, dp(10), 0, 0) }
+        shuffleButton = glyphButton("⇄", 22) { IpodAudioEngine.toggleShuffle() }
+        repeatButton = glyphButton("↻", 22) { IpodAudioEngine.cycleRepeat() }
+        playPause = TextView(this).apply {
+            this.text = "▶"; textSize = 30f; setTextColor(BG); gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
+            background = circle(TEXT); isClickable = true; isFocusable = true
+            setOnClickListener { IpodAudioEngine.playPause() }
         }
-        text.addView(apps)
-        body.addView(text, if (wide) LinearLayout.LayoutParams(0, -2, 1f) else LinearLayout.LayoutParams(-1, -2))
-        playing.addView(body)
-        content.addView(playing, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        controls.addView(shuffleButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { rightMargin = dp(10) })
+        controls.addView(glyphButton("⏮", 34) { IpodAudioEngine.previous() }, LinearLayout.LayoutParams(dp(72), dp(72)).apply { rightMargin = dp(6) })
+        controls.addView(playPause, LinearLayout.LayoutParams(dp(84), dp(84)).apply { leftMargin = dp(6); rightMargin = dp(6) })
+        controls.addView(glyphButton("⏭", 34) { IpodAudioEngine.next() }, LinearLayout.LayoutParams(dp(72), dp(72)).apply { leftMargin = dp(6) })
+        controls.addView(repeatButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { leftMargin = dp(10) })
+        text.addView(controls, LinearLayout.LayoutParams(-1, -2))
 
-        // Connection card.
-        val connection = card()
-        val connectionRow = row().apply { gravity = Gravity.CENTER_VERTICAL }
-        val connectionText = column()
-        detailView = label("", 13, MUTED)
-        batteryView = label("", 13, MUTED)
-        connectionText.addView(detailView); connectionText.addView(batteryView)
-        meter = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; progressTintList = ColorStateList.valueOf(ACCENT) }
-        connectionText.addView(meter, LinearLayout.LayoutParams(-1, dp(10)).apply { topMargin = dp(8) })
-        connectionRow.addView(connectionText, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(14) })
-        startStop = button("Start", true) { toggleEngine() }
-        connectionRow.addView(startStop, LinearLayout.LayoutParams(dp(170), dp(60)))
-        connection.addView(connectionRow)
-        content.addView(connection, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        chips = row().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(12), 0, 0) }
+        chips.addView(chip("Siri") { IpodAudioEngine.siri() })
+        listOf("Music" to "com.apple.Music", "Podcasts" to "com.apple.podcasts", "Spotify" to "com.spotify.client", "YT Music" to "com.google.ios.youtubemusic").forEach { (name, bundle) ->
+            chips.addView(chip(name) { IpodAudioEngine.launchApp(bundle); toast("Opening $name on the iPhone") })
+        }
+        text.addView(chips, LinearLayout.LayoutParams(-1, -2))
 
-        // Settings card.
-        val settings = card()
-        settings.addView(label("Volume", 15, MUTED))
-        settings.addView(SeekBar(this).apply {
+        startButton = TextView(this).apply {
+            this.text = "Start"; textSize = 20f; setTextColor(BG); gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
+            background = rounded(TEXT, Color.TRANSPARENT, 28); isClickable = true; isFocusable = true
+            setOnClickListener { toggleEngine() }
+        }
+        text.addView(startButton, LinearLayout.LayoutParams(if (wide) dp(220) else -1, dp(56)).apply { topMargin = dp(16) })
+
+        main.addView(text, if (wide) LinearLayout.LayoutParams(0, -2, 1f) else LinearLayout.LayoutParams(-1, -2))
+        content.addView(main, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        footer = label("", 12, MUTED).apply { gravity = Gravity.CENTER; maxLines = 2 }
+        content.addView(footer)
+
+        buildSheet(root)
+    }
+
+    /** Settings and diagnostics, slid over the bottom of the screen from the gear button. */
+    private fun buildSheet(root: FrameLayout) {
+        sheet = FrameLayout(this).apply { visibility = View.GONE; setBackgroundColor(Color.argb(140, 0, 0, 0)); setOnClickListener { toggleSheet() } }
+        val panel = ScrollView(this).apply {
+            background = rounded(SURFACE, BORDER, 22); isClickable = true
+            setPadding(dp(22), dp(18), dp(22), dp(18))
+        }
+        sheetBody = column()
+        panel.addView(sheetBody)
+        sheet.addView(panel, FrameLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.78).toInt(), Gravity.BOTTOM))
+        root.addView(sheet, FrameLayout.LayoutParams(-1, -1))
+
+        val head = row().apply { gravity = Gravity.CENTER_VERTICAL }
+        head.addView(label("iPod audio", 20, TEXT, true), LinearLayout.LayoutParams(0, -2, 1f))
+        sheetStartStop = TextView(this).apply {
+            text = "Start"; textSize = 16f; setTextColor(BG); gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
+            background = rounded(ACCENT, Color.TRANSPARENT, 22); isClickable = true; setOnClickListener { toggleEngine() }
+        }
+        head.addView(sheetStartStop, LinearLayout.LayoutParams(dp(120), dp(44)))
+        sheetBody.addView(head)
+        meter = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; progressTintList = ColorStateList.valueOf(ACCENT) }
+        sheetBody.addView(meter, LinearLayout.LayoutParams(-1, dp(8)).apply { topMargin = dp(10) })
+
+        sheetBody.addView(label("Volume", 14, MUTED).apply { setPadding(0, dp(14), 0, 0) })
+        sheetBody.addView(SeekBar(this).apply {
             max = 100; progress = (IpodSettings.volume(this@IpodModeActivity) * 100).toInt()
             progressTintList = ColorStateList.valueOf(ACCENT); thumbTintList = ColorStateList.valueOf(ACCENT)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -152,45 +210,45 @@ class IpodModeActivity : Activity() {
                 override fun onStartTrackingTouch(bar: SeekBar) = Unit; override fun onStopTrackingTouch(bar: SeekBar) = Unit
             })
         }, LinearLayout.LayoutParams(-1, dp(40)))
-        settings.addView(switchRow("Gain boost (+6 dB)", "For quiet phones; the soft clipper catches peaks when it is on.", IpodSettings.gainBoost(this)) {
+        sheetBody.addView(switchRow("Gain boost (+6 dB)", "For quiet phones; the limiter catches peaks.", IpodSettings.gainBoost(this)) {
             IpodAudioEngine.gainBoost = it; IpodSettings.saveGainBoost(this, it)
         })
-        settings.addView(switchRow("Direct USB audio driver", "Reads the iPhone's USB audio packets straight from the bus (lowest latency, no Android audio input). Off = Android's USB audio input.", IpodSettings.directUsbAudio(this)) {
+        sheetBody.addView(switchRow("Direct USB audio driver", "Reads the iPhone's USB audio packets straight from the bus. Off = Android's USB audio input.", IpodSettings.directUsbAudio(this)) {
             IpodSettings.saveDirectUsbAudio(this, it); if (IpodAudioEngine.isRunning()) toast("Applies at the next connection")
         })
-        settings.addView(switchRow("Start iPod audio on plug-in instead of CarPlay", "When Android hands DiPlay the iPhone, this screen opens and connects.", IpodSettings.autoStartOnPlugIn(this)) {
+        sheetBody.addView(switchRow("Start iPod audio on plug-in instead of CarPlay", "When Android hands DiPlay the iPhone, this screen opens and connects.", IpodSettings.autoStartOnPlugIn(this)) {
             IpodSettings.saveAutoStartOnPlugIn(this, it)
         })
-        settings.addView(label("Charging current announced to the iPhone (what this USB port can supply)", 14, TEXT).apply { setPadding(0, dp(10), 0, dp(4)) })
+        sheetBody.addView(label("Charging current announced to the iPhone", 14, TEXT).apply { setPadding(0, dp(12), 0, dp(4)) })
         val currents = row()
-        val currentButtons = ArrayList<Button>()
+        val currentButtons = ArrayList<TextView>()
         IpodSettings.CHARGE_CURRENTS.forEachIndexed { index, ma ->
-            val b = control("$ma mA", IpodSettings.chargeCurrent(this) == ma) {
+            val b = chip("$ma mA", IpodSettings.chargeCurrent(this) == ma) {
                 IpodSettings.saveChargeCurrent(this, ma)
-                currentButtons.forEachIndexed { i, other -> style(other, IpodSettings.CHARGE_CURRENTS[i] == ma) }
+                currentButtons.forEachIndexed { i, other -> styleChip(other, IpodSettings.CHARGE_CURRENTS[i] == ma) }
                 if (IpodAudioEngine.isRunning()) toast("Applies at the next connection")
             }
             currentButtons += b
-            currents.addView(b, LinearLayout.LayoutParams(0, dp(42), 1f).apply { if (index < IpodSettings.CHARGE_CURRENTS.size - 1) rightMargin = dp(6) })
+            currents.addView(b)
         }
-        settings.addView(currents)
-        val links = row().apply { setPadding(0, dp(12), 0, 0) }
-        links.addView(button("Equalizer", false) { startActivity(Intent(this, DiPlayActivity::class.java).putExtra("page", "eq")) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(8) })
-        links.addView(button("Request USB audio", false) {
+        sheetBody.addView(currents)
+        val links = row().apply { setPadding(0, dp(14), 0, 0) }
+        links.addView(button("Equalizer") { startActivity(Intent(this, DiPlayActivity::class.java).putExtra("page", "eq")) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(8) })
+        links.addView(button("Request USB audio") {
             if (IpodAudioEngine.capabilities.usbAudio) { IpodAudioEngine.restartAudio(); toast("Asked the iPhone to (re)start USB audio") }
             else { IpodAudioEngine.forceAudioRequest(); toast("Experimental: sent the USB-audio request the iPhone did not accept in identification; check the log") }
-        }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(8) })
-        links.addView(button("Switch to CarPlay", false) {
+        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(8) })
+        links.addView(button("Switch to CarPlay") {
             stopEngine()
             startActivity(Intent(this, DiPlayActivity::class.java).putExtra("connect_usb", true))
             finish()
-        }, LinearLayout.LayoutParams(0, dp(50), 1f))
-        settings.addView(links)
-        content.addView(settings, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
-
+        }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        sheetBody.addView(links)
         logView = label("", 11, MUTED).apply { typeface = Typeface.MONOSPACE; setPadding(0, dp(12), 0, 0) }
-        content.addView(logView)
+        sheetBody.addView(logView)
     }
+
+    private fun toggleSheet() { sheet.visibility = if (sheet.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
 
     override fun onStart() {
         super.onStart(); IpodAudioEngine.listeners.add(engineListener); handler.post(refresh)
@@ -198,6 +256,7 @@ class IpodModeActivity : Activity() {
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent) }
     override fun onStop() { IpodAudioEngine.listeners.remove(engineListener); handler.removeCallbacks(refresh); super.onStop() }
+    override fun onBackPressed() { if (sheet.visibility == View.VISIBLE) toggleSheet() else super.onBackPressed() }
 
     private fun toggleEngine() { if (IpodAudioEngine.isRunning()) stopEngine() else startEngine() }
 
@@ -227,49 +286,109 @@ class IpodModeActivity : Activity() {
 
     private fun render() {
         val running = IpodAudioEngine.isRunning()
+        val ready = IpodAudioEngine.state == IpodAudioEngine.State.READY
         val info = IpodAudioEngine.nowPlaying
-        statusView.text = IpodAudioEngine.status
-        statusView.setTextColor(when (IpodAudioEngine.state) { IpodAudioEngine.State.READY -> ACCENT; IpodAudioEngine.State.FAILED -> WARNING; else -> MUTED })
-        startStop.text = if (running) "Stop" else "Start"
-        titleView.text = info.title ?: if (IpodAudioEngine.state == IpodAudioEngine.State.READY) "Nothing playing" else "iPhone as a USB music source"
-        artistView.text = info.artist ?: if (IpodAudioEngine.state == IpodAudioEngine.State.READY) "Start playback on the phone, or open an app below." else "Plug the iPhone in, unlock it, then tap Start."
-        albumView.text = info.album ?: ""
-        appView.text = listOfNotNull(info.sourceApp, shuffleText(), repeatText(),
-            if (running && IpodAudioEngine.state == IpodAudioEngine.State.READY && !IpodAudioEngine.capabilities.hid) "controls refused by the iPhone: use the phone or Siri" else null).joinToString(" · ")
+        val caps = IpodAudioEngine.capabilities
+
+        statusPill.text = when (IpodAudioEngine.state) {
+            IpodAudioEngine.State.IDLE, IpodAudioEngine.State.STOPPED -> "Not connected"
+            IpodAudioEngine.State.READY -> if (IpodAudioEngine.audioActive) "Connected · ${IpodAudioEngine.sampleRate / 1000.0} kHz" else "Connected"
+            IpodAudioEngine.State.FAILED -> "Failed"
+            else -> "Connecting…"
+        }
+        statusPill.setTextColor(when (IpodAudioEngine.state) { IpodAudioEngine.State.READY -> TEXT; IpodAudioEngine.State.FAILED -> WARNING; else -> MUTED })
+
+        if (ready && info.title != null) {
+            titleView.text = info.title
+            artistView.text = info.artist ?: ""
+            albumView.text = info.album ?: ""
+        } else if (ready) {
+            titleView.text = "Nothing playing"
+            artistView.text = "Play something on the iPhone or open an app below."
+            albumView.text = ""
+        } else if (running) {
+            titleView.text = IpodAudioEngine.status.substringBefore('.').ifEmpty { "Connecting" }
+            artistView.text = "Keep the iPhone unlocked."
+            albumView.text = ""
+        } else {
+            titleView.text = "iPhone"
+            artistView.text = "Plug it in with a data cable, unlock it, then Start."
+            albumView.text = if (IpodAudioEngine.state == IpodAudioEngine.State.FAILED) IpodAudioEngine.status else ""
+        }
+        sourceView.text = listOfNotNull(
+            info.sourceApp?.takeIf { ready },
+            when (IpodAudioEngine.shuffle) { 1 -> "Shuffle"; 2 -> "Shuffle albums"; else -> null },
+            when (IpodAudioEngine.repeat) { 1 -> "Repeat one"; 2 -> "Repeat all"; else -> null },
+            IpodAudioEngine.power.describe().takeIf { ready && it.isNotEmpty() },
+            if (ready && !caps.hid) "controls refused by the iPhone: use the phone or Siri" else null,
+        ).joinToString("  ·  ")
+
         val art = IpodAudioEngine.artwork
         if (art !== shownArtwork) {
             shownArtwork = art
-            if (art != null) artworkView.setImageBitmap(art) else artworkView.setImageResource(com.shilapi.xcertplay.host.R.drawable.art_now_playing_placeholder)
+            if (art != null) {
+                artworkView.setImageBitmap(art)
+                backdrop.setImageBitmap(softBackdrop(art)); backdrop.animate().alpha(0.55f).setDuration(600).start()
+                applyWash(dominantColor(art))
+            } else {
+                artworkView.setImageResource(com.shilapi.xcertplay.host.R.drawable.art_now_playing_placeholder)
+                backdrop.animate().alpha(0f).setDuration(400).start()
+                applyWash(BG)
+            }
         }
+
         val duration = info.durationMillis
         val elapsed = IpodAudioEngine.elapsedNow()
         if (!seeking) {
             progress.progress = if (duration != null && duration > 0 && elapsed != null) (elapsed * 1000 / duration).toInt().coerceIn(0, 1000) else 0
             elapsedView.text = clock(elapsed)
         }
-        durationView.text = clock(duration)
+        remainingView.text = if (duration != null && elapsed != null) "-" + clock((duration - elapsed).coerceAtLeast(0)) else clock(duration)
+        progress.isEnabled = ready && caps.setNowPlaying
+        progress.alpha = if (ready) 1f else 0.35f
+
         playPause.text = if (IpodAudioEngine.playing) "⏸" else "▶"
-        val caps = IpodAudioEngine.capabilities
-        val controlsOn = !running || caps.hid
-        listOf(playPause, shuffleButton, repeatButton).forEach { it.alpha = if (controlsOn) 1f else 0.4f }
-        progress.isEnabled = !running || caps.setNowPlaying
-        style(shuffleButton, (IpodAudioEngine.shuffle ?: 0) != 0)
-        style(repeatButton, (IpodAudioEngine.repeat ?: 0) != 0)
-        repeatButton.text = when (IpodAudioEngine.repeat) { 1 -> "Repeat 1"; 2 -> "Repeat all"; else -> "Repeat" }
-        detailView.text = if (running) buildString {
-            append(if (IpodAudioEngine.authenticated) "Authenticated accessory" else if (IpodAudioEngine.identified) "Identified, authenticating…" else "Connecting…")
-            if (IpodAudioEngine.audioActive) append(" · ${if (IpodAudioEngine.audioPath == "direct") "direct USB" else "Android"} audio ${IpodAudioEngine.sampleRate / 1000.0} kHz · ${IpodAudioEngine.framesPlayed / maxOf(1, IpodAudioEngine.sampleRate)} s · underruns ${IpodAudioEngine.underruns}")
-            else if (IpodAudioEngine.state == IpodAudioEngine.State.READY) append(" · waiting for USB audio")
-            append("\nInput: ${IpodAudioEngine.inputDevice}")
-        } else "Plug the iPhone in, unlock it, then Start. Works without CarPlay: music, podcasts, any app's audio, with track info and steering-wheel keys."
-        val power = IpodAudioEngine.power.describe()
-        batteryView.text = if (running && power.isNotEmpty()) "iPhone $power" else ""
+        controls.visibility = if (running) View.VISIBLE else View.GONE
+        chips.visibility = if (ready) View.VISIBLE else View.GONE
+        controls.alpha = if (ready && caps.hid) 1f else 0.4f
+        styleGlyph(shuffleButton, (IpodAudioEngine.shuffle ?: 0) != 0)
+        styleGlyph(repeatButton, (IpodAudioEngine.repeat ?: 0) != 0)
+        repeatButton.text = when (IpodAudioEngine.repeat) { 1 -> "↻¹"; else -> "↻" }
+        startButton.visibility = if (running) View.GONE else View.VISIBLE
+        sheetStartStop.text = if (running) "Stop" else "Start"
+
+        footer.text = when {
+            !running -> "Music, podcasts and any app's audio from the iPhone, with track info and steering-wheel keys. No CarPlay needed."
+            ready && IpodAudioEngine.audioActive -> "${if (IpodAudioEngine.audioPath == "direct") "Direct USB audio" else "Android audio input"} · ${IpodAudioEngine.framesPlayed / maxOf(1, IpodAudioEngine.sampleRate)} s · underruns ${IpodAudioEngine.underruns}"
+            ready -> if (caps.usbAudio) "Waiting for the iPhone to start USB audio…" else "The iPhone refused the USB-audio request; audio may stay on the phone. Try “Request USB audio” under ⚙."
+            else -> IpodAudioEngine.status
+        }
         meter.progress = (IpodAudioEngine.level * 2500).toInt().coerceIn(0, 1000)
         logView.text = IpodAudioEngine.recentLog.takeLast(10).joinToString("\n")
     }
 
-    private fun shuffleText() = when (IpodAudioEngine.shuffle) { 1 -> "Shuffle songs"; 2 -> "Shuffle albums"; else -> null }
-    private fun repeatText() = when (IpodAudioEngine.repeat) { 1 -> "Repeat one"; 2 -> "Repeat all"; else -> null }
+    // ---- colour from the artwork ----
+    private fun dominantColor(bitmap: Bitmap): Int {
+        val small = Bitmap.createScaledBitmap(bitmap, 8, 8, true)
+        var r = 0L; var g = 0L; var b = 0L
+        for (y in 0 until 8) for (x in 0 until 8) { val c = small.getPixel(x, y); r += Color.red(c); g += Color.green(c); b += Color.blue(c) }
+        small.recycle()
+        val n = 64
+        // Pull toward a dark, slightly saturated tone so white text stays readable.
+        val hsv = FloatArray(3)
+        Color.RGBToHSV((r / n).toInt(), (g / n).toInt(), (b / n).toInt(), hsv)
+        hsv[1] = (hsv[1] * 1.2f).coerceIn(0.25f, 0.8f); hsv[2] = 0.28f
+        return Color.HSVToColor(hsv)
+    }
+
+    private fun softBackdrop(bitmap: Bitmap): Bitmap = Bitmap.createScaledBitmap(bitmap, 24, 24, true)
+
+    private fun applyWash(color: Int) {
+        if (color == washColor) return
+        washColor = color
+        wash.background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Color.argb(200, Color.red(color), Color.green(color), Color.blue(color)), BG))
+    }
+
     private fun clock(millis: Long?): String {
         if (millis == null || millis < 0) return "–:––"
         val total = millis / 1000
@@ -278,25 +397,34 @@ class IpodModeActivity : Activity() {
     }
     private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
 
-    // ---- view helpers (same look as the main screen) ----
+    // ---- view helpers ----
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-    private fun card() = column().apply { background = rounded(SURFACE, BORDER); setPadding(dp(18), dp(16), dp(18), dp(16)) }
     private fun label(text: String, size: Int, color: Int, bold: Boolean = false) = TextView(this).apply { this.text = text; textSize = size.toFloat(); setTextColor(color); if (bold) setTypeface(typeface, Typeface.BOLD) }
-    private fun button(title: String, primary: Boolean, click: () -> Unit) = Button(this).apply {
-        text = title; isAllCaps = false; textSize = 16f; setTextColor(if (primary) BG else TEXT)
-        background = rounded(if (primary) ACCENT else SURFACE, BORDER); setOnClickListener { click() }
+    private fun glyphButton(glyph: String, size: Int, click: () -> Unit) = TextView(this).apply {
+        text = glyph; textSize = size.toFloat(); setTextColor(TEXT); gravity = Gravity.CENTER
+        background = circle(Color.argb(28, 255, 255, 255)); isClickable = true; isFocusable = true; setOnClickListener { click() }
     }
-    private fun control(title: String, active: Boolean, click: () -> Unit) = Button(this).apply {
-        text = title; isAllCaps = false; textSize = 15f; setPadding(dp(4), 0, dp(4), 0)
-        style(this, active); setOnClickListener { click() }
+    private fun styleGlyph(view: TextView, active: Boolean) {
+        view.setTextColor(if (active) BG else TEXT)
+        view.background = circle(if (active) TEXT else Color.argb(28, 255, 255, 255))
     }
-    private fun style(button: Button, active: Boolean) {
-        button.setTextColor(if (active) BG else TEXT)
-        button.background = rounded(if (active) ACCENT else Color.rgb(30, 41, 59), BORDER)
+    private fun chip(title: String, active: Boolean = false, click: () -> Unit) = TextView(this).apply {
+        text = title; textSize = 14f; gravity = Gravity.CENTER; setPadding(dp(14), dp(8), dp(14), dp(8))
+        styleChip(this, active); isClickable = true; isFocusable = true; setOnClickListener { click() }
+        layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) }
     }
-    private fun rounded(color: Int, stroke: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(14).toFloat(); setStroke(dp(1), stroke) }
+    private fun styleChip(view: TextView, active: Boolean) {
+        view.setTextColor(if (active) BG else TEXT)
+        view.background = rounded(if (active) TEXT else Color.argb(36, 255, 255, 255), Color.TRANSPARENT, 18)
+    }
+    private fun button(title: String, click: () -> Unit) = Button(this).apply {
+        text = title; isAllCaps = false; textSize = 15f; setTextColor(TEXT)
+        background = rounded(Color.argb(36, 255, 255, 255), BORDER, 14); setOnClickListener { click() }
+    }
+    private fun rounded(color: Int, stroke: Int, radiusDp: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radiusDp).toFloat(); if (stroke != Color.TRANSPARENT) setStroke(dp(1), stroke) }
+    private fun circle(color: Int) = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
     private fun switchRow(title: String, description: String, checked: Boolean, onChanged: (Boolean) -> Unit): View {
         val r = row().apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(8), 0, 0) }
         val text = column().apply { addView(label(title, 15, TEXT)); if (description.isNotEmpty()) addView(label(description, 12, MUTED)) }
@@ -306,8 +434,8 @@ class IpodModeActivity : Activity() {
     }
 
     companion object {
-        private val BG = Color.rgb(12, 17, 27); private val SURFACE = Color.rgb(21, 30, 44); private val BORDER = Color.rgb(42, 56, 75)
-        private val ACCENT = Color.rgb(166, 200, 255); private val TEXT = Color.rgb(241, 245, 252); private val MUTED = Color.rgb(168, 182, 202)
+        private val BG = Color.rgb(10, 12, 18); private val SURFACE = Color.rgb(24, 28, 38); private val BORDER = Color.rgb(50, 56, 72)
+        private val ACCENT = Color.rgb(166, 200, 255); private val TEXT = Color.rgb(246, 247, 250); private val MUTED = Color.rgb(170, 178, 194)
         private val WARNING = Color.rgb(255, 180, 120)
     }
 }
