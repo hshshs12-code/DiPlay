@@ -39,7 +39,19 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.29)
+## Fork features (0.2.13-legacy24.30)
+
+24.30: iPod mode accepted on the car; bisecting the USB-audio request
+- Third on-car report (24.29): level 1 (everything except the USB-device-mode
+  audio messages 0xDA00/01/02) was accepted; MFi authentication succeeded with
+  the offline identity; Now Playing, artwork and the HID remote worked; the
+  direct isochronous driver streamed 44.1 kHz packets with zero errors. The
+  phone kept its own speaker as the route because the audio request could
+  not be declared.
+- Ladder now bisects that group: level 1 = start + information (no stop),
+  level 2 = start only, level 3 = no audio group (the accepted one), then the
+  other eliminations. "Request USB audio" on the iPod screen sends 0xDA00 even
+  when undeclared, as a logged experiment.
 
 24.29: iPod identification elimination ladder
 - Second on-car report: every 24.27 level was rejected on parameters 6/7,

@@ -86,6 +86,13 @@ class Iap2IpodClient(
     fun launchApp(bundleId: String) { if (ready && capabilities.appLaunch) outgoing.add(Command(Iap2IpodMessages.requestAppLaunch(bundleId))) }
     fun restartAudio() { if (ready && capabilities.usbAudio) outgoing.add(Command(Iap2IpodMessages.startUsbDeviceModeAudio())) }
 
+    /** Experiment: send StartUSBDeviceModeAudio even though the accepted identity did not declare it. */
+    fun forceAudioRequest() {
+        if (!ready) return
+        listener.onProgress("experiment: sending da00 StartUSBDeviceModeAudio although it was not declared (watch for da01 or a link close)")
+        outgoing.add(Command(Iap2IpodMessages.startUsbDeviceModeAudio()))
+    }
+
     private fun drainOutgoing() {
         while (true) {
             val command = outgoing.poll() ?: return

@@ -176,7 +176,10 @@ class IpodModeActivity : Activity() {
         settings.addView(currents)
         val links = row().apply { setPadding(0, dp(12), 0, 0) }
         links.addView(button("Equalizer", false) { startActivity(Intent(this, DiPlayActivity::class.java).putExtra("page", "eq")) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(8) })
-        links.addView(button("Restart USB audio", false) { IpodAudioEngine.restartAudio(); toast("Asked the iPhone to restart USB audio") }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(8) })
+        links.addView(button("Request USB audio", false) {
+            if (IpodAudioEngine.capabilities.usbAudio) { IpodAudioEngine.restartAudio(); toast("Asked the iPhone to (re)start USB audio") }
+            else { IpodAudioEngine.forceAudioRequest(); toast("Experimental: sent the USB-audio request the iPhone did not accept in identification; check the log") }
+        }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(8) })
         links.addView(button("Switch to CarPlay", false) {
             stopEngine()
             startActivity(Intent(this, DiPlayActivity::class.java).putExtra("connect_usb", true))

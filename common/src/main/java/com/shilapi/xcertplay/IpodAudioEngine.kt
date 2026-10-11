@@ -132,6 +132,7 @@ object IpodAudioEngine {
     fun toggleShuffle() = client?.setShuffle(if ((shuffle ?: 0) == 0) 1 else 0)
     fun cycleRepeat() = client?.setRepeat(((repeat ?: 0) + 1) % 3)
     fun restartAudio() = client?.restartAudio()
+    fun forceAudioRequest() = client?.forceAudioRequest()
 
     // ---- lifecycle ----------------------------------------------------------------------------
 

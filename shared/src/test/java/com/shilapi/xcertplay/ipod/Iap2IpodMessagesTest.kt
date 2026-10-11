@@ -32,21 +32,25 @@ class Iap2IpodMessagesTest {
     }
 
     @Test
-    fun eliminationLevelsEachRemoveOneGroup() {
-        val level1 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 1))
-        assertTrue(!level1.u16List(6).contains(0xda00) && !level1.u16List(7).contains(0xda01) && level1.u16List(6).contains(0x6800))
-        val level2 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 2))
-        assertTrue(!level2.u16List(6).contains(0x6800) && !level2.has(18) && level2.u16List(6).contains(0xda00))
+    fun eliminationLevelsBisectTheAudioGroupThenRemoveOneGroupEach() {
+        fun sent(level: Int) = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, level)).u16List(6)
+        fun received(level: Int) = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, level)).u16List(7)
+        assertTrue(sent(0).containsAll(listOf(0xda00, 0xda02)) && received(0).contains(0xda01))
+        assertTrue(sent(1).contains(0xda00) && !sent(1).contains(0xda02) && received(1).contains(0xda01))
+        assertTrue(sent(2).contains(0xda00) && !sent(2).contains(0xda02) && !received(2).contains(0xda01))
+        assertTrue(!sent(3).contains(0xda00) && !received(3).contains(0xda01) && sent(3).contains(0x6800))
         val level4 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 4))
-        assertTrue(!level4.u16List(6).contains(0xae03) && !level4.u16List(7).contains(0xae01))
-        assertEquals(0, level4.u8(8))
-        val level5 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 5))
-        assertEquals(listOf(0xaa01, 0xaa03, 0x5000, 0x5002, 0xae00, 0xae02, 0xae03), level5.u16List(6))
-        assertEquals(listOf(0xaa00, 0xaa02, 0xaa04, 0xaa05, 0x5001, 0xae01), level5.u16List(7))
+        assertTrue(!level4.u16List(6).contains(0x6800) && !level4.has(18) && level4.u16List(6).contains(0xda00))
         val level6 = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 6))
-        assertEquals(listOf(0xaa01, 0xaa03, 0x5000, 0x5002), level6.u16List(6))
+        assertTrue(!level6.u16List(6).contains(0xae03) && !level6.u16List(7).contains(0xae01))
+        assertEquals(0, level6.u8(8))
+        assertEquals(listOf(0xaa01, 0xaa03, 0x5000, 0x5002, 0xae00, 0xae02, 0xae03), sent(7))
+        assertEquals(listOf(0xaa00, 0xaa02, 0xaa04, 0xaa05, 0x5001, 0xae01), received(7))
+        assertEquals(listOf(0xaa01, 0xaa03, 0x5000, 0x5002), sent(8))
         assertEquals("full", Iap2IpodMessages.capabilities(0).describe())
-        assertEquals("no USB-audio request", Iap2IpodMessages.capabilities(1).describe())
+        assertEquals("USB-audio without stop", Iap2IpodMessages.capabilities(1).describe())
+        assertEquals("USB-audio start only", Iap2IpodMessages.capabilities(2).describe())
+        assertEquals("no USB-audio request", Iap2IpodMessages.capabilities(3).describe())
         assertTrue(Iap2IpodMessages.describeLists(0).contains("da00") && Iap2IpodMessages.describeLists(0).contains("received=["))
     }
 
