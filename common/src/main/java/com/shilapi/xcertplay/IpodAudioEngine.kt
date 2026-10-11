@@ -606,9 +606,20 @@ object IpodSettings {
     fun saveVolume(context: Context, value: Float) = prefs(context).edit().putFloat("volume", value).apply()
     fun gainBoost(context: Context): Boolean = prefs(context).getBoolean("gain_boost", false)
     fun saveGainBoost(context: Context, value: Boolean) = prefs(context).edit().putBoolean("gain_boost", value).apply()
-    /** On USB plug-in, start iPod audio instead of CarPlay. */
-    fun autoStartOnPlugIn(context: Context): Boolean = prefs(context).getBoolean("auto_start", false)
-    fun saveAutoStartOnPlugIn(context: Context, value: Boolean) = prefs(context).edit().putBoolean("auto_start", value).apply()
+    /** On USB plug-in, start iPod audio instead of CarPlay (legacy flag; see [plugInChoice]). */
+    fun autoStartOnPlugIn(context: Context): Boolean = plugInChoice(context) == CHOICE_IPOD
+    fun saveAutoStartOnPlugIn(context: Context, value: Boolean) = savePlugInChoice(context, if (value) CHOICE_IPOD else CHOICE_ASK)
+    const val CHOICE_ASK = "ask"
+    const val CHOICE_CARPLAY = "carplay"
+    const val CHOICE_IPOD = "ipod"
+    /** What a plug-in from anywhere does: ask with the chooser screen, or go straight to one mode. */
+    fun plugInChoice(context: Context): String {
+        val p = prefs(context)
+        val stored = p.getString("plug_in_choice", null)
+        if (stored != null) return stored
+        return if (p.getBoolean("auto_start", false)) CHOICE_IPOD else CHOICE_ASK
+    }
+    fun savePlugInChoice(context: Context, value: String) = prefs(context).edit().putString("plug_in_choice", value).apply()
     /** Current the head unit's USB port can supply, announced to the iPhone (mA). */
     /** Capture the iPhone's USB audio with the fork's own isochronous driver instead of Android's audio input. */
     fun directUsbAudio(context: Context): Boolean = prefs(context).getBoolean("direct_usb_audio", true)

@@ -70,6 +70,13 @@
             android:launchMode="singleTask"
             android:configChanges="density|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:theme="@style/Theme.Xcertplay" />
+        <activity android:name="com.shilapi.xcertplay.PlugInChooserActivity"
+            android:label="iPhone connected"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:configChanges="density|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:theme="@style/Theme.Xcertplay" />
         <service android:name="com.shilapi.xcertplay.IpodAudioService"
             android:exported="false" android:foregroundServiceType="connectedDevice|microphone" />
 

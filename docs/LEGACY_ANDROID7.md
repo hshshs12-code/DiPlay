@@ -39,7 +39,14 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.36)
+## Fork features (0.2.13-legacy24.37)
+
+24.37: plug-in chooser
+- `PlugInChooserActivity`: on a USB plug-in from anywhere, a fullscreen screen in the iPod
+  design offers CarPlay or iPod audio as two big targets, with "Remember my choice" and "Not now".
+- `IpodSettings.plugInChoice` (ask / carplay / ipod, migrated from the old auto-start flag) and a
+  three-way chip row on the iPod screen's sheet. The iPod screen in the foreground or a running
+  iPod session still takes the plug-in directly; CarPlay auto-launch off still means nothing opens.
 
 24.36: plug-in on the iPod screen starts iPod audio
 - While `IpodModeActivity` is in the foreground (or an iPod session is running), a USB attach is

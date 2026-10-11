@@ -545,18 +545,26 @@ class CarPlayHostActivity : ComponentActivity() {
         ManualParkedVideo.bind(this)
         com.shilapi.xcertplay.media.StartupWarmup.run(com.shilapi.xcertplay.media.AudioEffectSettings.load(this).let { it.enabled && it.dspMode })
         if (isIphoneUsbAttachment(intent)) {
-            // Legacy fork: iPod audio takes the plug-in when the user chose it, when the iPod screen is
-            // the one on screen, or when an iPod session is already running.
-            if ((IpodSettings.autoStartOnPlugIn(this) || IpodModeActivity.inForeground || IpodAudioEngine.isRunning()) && !CarPlayBackgroundSession.hasSession()) {
-                IpodAudioEngine.log(this, "USB attach: starting iPod audio instead of CarPlay (foreground=${IpodModeActivity.inForeground} running=${IpodAudioEngine.isRunning()})")
-                startActivity(Intent(this, IpodModeActivity::class.java).putExtra("auto_start", true))
-                finish()
-                return
-            }
-            if (!AirPlayPersistence.loadUsbAutoLaunch(this) && !CarPlayBackgroundSession.hasSession()) {
-                // Launched by Android for the plugged-in iPhone, but auto-launch is off: go away quietly.
-                finish()
-                return
+            // Legacy fork: a plug-in goes to iPod audio when that was chosen, when the iPod screen is on
+            // screen or a session is running; otherwise the chooser asks, unless CarPlay was chosen.
+            val choice = IpodSettings.plugInChoice(this)
+            if (!CarPlayBackgroundSession.hasSession()) {
+                if (choice == IpodSettings.CHOICE_IPOD || IpodModeActivity.inForeground || IpodAudioEngine.isRunning()) {
+                    IpodAudioEngine.log(this, "USB attach: starting iPod audio instead of CarPlay (choice=$choice foreground=${IpodModeActivity.inForeground} running=${IpodAudioEngine.isRunning()})")
+                    startActivity(Intent(this, IpodModeActivity::class.java).putExtra("auto_start", true))
+                    finish()
+                    return
+                }
+                if (!AirPlayPersistence.loadUsbAutoLaunch(this)) {
+                    // Launched by Android for the plugged-in iPhone, but auto-launch is off: go away quietly.
+                    finish()
+                    return
+                }
+                if (choice != IpodSettings.CHOICE_CARPLAY) {
+                    startActivity(Intent(this, PlugInChooserActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    finish()
+                    return
+                }
             }
             AirPlayPersistence.saveWirelessEnabled(this, false)
         }

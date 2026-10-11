@@ -222,9 +222,18 @@ class IpodModeActivity : Activity() {
         sheetBody.addView(switchRow("Direct USB audio driver", "Reads the iPhone's USB audio packets straight from the bus. Off = Android's USB audio input.", IpodSettings.directUsbAudio(this)) {
             IpodSettings.saveDirectUsbAudio(this, it); if (IpodAudioEngine.isRunning()) toast("Applies at the next connection")
         })
-        sheetBody.addView(switchRow("Start iPod audio on plug-in instead of CarPlay", "When Android hands DiPlay the iPhone, this screen opens and connects.", IpodSettings.autoStartOnPlugIn(this)) {
-            IpodSettings.saveAutoStartOnPlugIn(this, it)
-        })
+        sheetBody.addView(label("When the iPhone is plugged in", 14, TEXT).apply { setPadding(0, dp(12), 0, dp(4)) })
+        val choiceRow = row()
+        val choiceButtons = ArrayList<Pair<String, TextView>>()
+        listOf(IpodSettings.CHOICE_ASK to "Ask me", IpodSettings.CHOICE_CARPLAY to "CarPlay", IpodSettings.CHOICE_IPOD to "iPod audio").forEachIndexed { index, (value, title) ->
+            val b = chip(title, IpodSettings.plugInChoice(this) == value) {
+                IpodSettings.savePlugInChoice(this, value)
+                choiceButtons.forEach { (v, view) -> styleChip(view, v == value) }
+            }
+            choiceButtons += value to b
+            choiceRow.addView(b, LinearLayout.LayoutParams(0, dp(42), 1f).apply { if (index < 2) rightMargin = dp(6) })
+        }
+        sheetBody.addView(choiceRow)
         sheetBody.addView(label("Charging current announced to the iPhone", 14, TEXT).apply { setPadding(0, dp(12), 0, dp(4)) })
         val currents = row()
         val currentButtons = ArrayList<TextView>()
