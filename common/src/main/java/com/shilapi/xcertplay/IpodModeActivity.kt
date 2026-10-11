@@ -30,6 +30,9 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * iPod audio over USB: a Now Playing screen in the spirit of an OEM or Apple layout. Large
@@ -73,6 +76,7 @@ class IpodModeActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.statusBarColor = BG; window.navigationBarColor = BG
+        applyFullscreen()
         val wide = resources.configuration.screenWidthDp >= 700
         val root = FrameLayout(this).apply { setBackgroundColor(BG) }
         setContentView(root)
@@ -249,6 +253,21 @@ class IpodModeActivity : Activity() {
     }
 
     private fun toggleSheet() { sheet.visibility = if (sheet.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+
+    /** Edge to edge: the head unit's bars hide and come back with a swipe from the edge. */
+    private fun applyFullscreen() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyFullscreen()
+    }
+    override fun onResume() { super.onResume(); applyFullscreen() }
 
     override fun onStart() {
         super.onStart(); IpodAudioEngine.listeners.add(engineListener); handler.post(refresh)

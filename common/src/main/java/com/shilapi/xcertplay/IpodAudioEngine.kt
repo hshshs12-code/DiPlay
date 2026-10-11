@@ -238,7 +238,12 @@ object IpodAudioEngine {
                         startAudio(app, 44_100, fallback = false, quiet = true)
                         audio?.awaitOpened(1_500)
                     }
-                    override fun onPower(state: IpodPowerState) { power = state; notifyListeners() }
+                    override fun onPower(state: IpodPowerState) {
+                        if (state.batteryLevelPercent != power.batteryLevelPercent || state.drawingMilliAmps != power.drawingMilliAmps || state.chargingState != power.chargingState) {
+                            log(app, "power: ${state.describe()} (announced ${IpodSettings.chargeCurrent(app)} mA)")
+                        }
+                        power = state; notifyListeners()
+                    }
                 })
                 client = ipod
                 ipod.run(isCancelled = { !running.get() })
@@ -386,6 +391,7 @@ object IpodAudioEngine {
             log(app, "direct capture rate=$rate channels=$channels ${output.describe()}")
             var timeouts = 0
             var started = false
+            var guardCounter = 0
             var lastStats = System.currentTimeMillis()
             try {
                 source.use {
@@ -398,7 +404,20 @@ object IpodAudioEngine {
                             continue
                         }
                         timeouts = 0
-                        if (!started) { started = true; output.play(); audioActive = true; notifyListeners(); log(app, "direct usb audio flowing: ${source.stats()}") }
+                        if (!started) {
+                            started = true
+                            // Packets that piled up while the output was being opened would sit in front of
+                            // the music for the whole session; drop them so latency starts near zero.
+                            val dropped = source.flush()
+                            output.play(); audioActive = true; notifyListeners()
+                            log(app, "direct usb audio flowing (dropped ${source.millisFor(dropped.toLong())} ms of startup backlog): ${source.stats()}")
+                            continue
+                        }
+                        if (++guardCounter >= 100) {
+                            guardCounter = 0
+                            val backlog = source.millisFor(source.bufferedBytes())
+                            if (backlog > MAX_BACKLOG_MILLIS) { val d = source.flush(); log(app, "latency guard: dropped ${source.millisFor(d.toLong())} ms of backlog") }
+                        }
                         applyGain(pcm, pcm.size)
                         measure(pcm, pcm.size)
                         output.write(pcm, pcm.size)
@@ -576,6 +595,7 @@ object IpodAudioEngine {
     }
 
     private const val TAG = "DiPlay-iPod"
+    private const val MAX_BACKLOG_MILLIS = 250L
 }
 
 /** Persisted iPod-mode preferences. */

@@ -14,6 +14,7 @@ object UsbIsoAudioNative {
     external fun open(fd: Int, interfaceNumber: Int, altSetting: Int, endpoint: Int, maxPacket: Int, packetsPerUrb: Int, urbCount: Int): Long
     external fun read(handle: Long, target: ByteArray, offset: Int, length: Int, timeoutMillis: Int): Int
     external fun stats(handle: Long): LongArray
+    external fun flush(handle: Long): Int
     external fun close(handle: Long)
 }
 
@@ -46,6 +47,15 @@ class UsbIsoAudioCapture private constructor(
         val whole = got - got % frameBytes
         return UsbAudioDescriptors.toPcm16(raw, whole, alternate.subframeBytes, alternate.bitResolution)
     }
+
+    /** Bytes waiting in the driver's ring buffer (latency not yet played). */
+    fun bufferedBytes(): Long = UsbIsoAudioNative.stats(handle)[6]
+
+    /** Discards buffered audio; returns the bytes dropped. */
+    fun flush(): Int = UsbIsoAudioNative.flush(handle)
+
+    /** Milliseconds of audio that [bytes] represent at this capture's rate. */
+    fun millisFor(bytes: Long): Long = bytes * 1000 / (rateHz.toLong() * frameBytes)
 
     fun stats(): String {
         val s = UsbIsoAudioNative.stats(handle)

@@ -82,8 +82,10 @@ class Iap2IpodMessagesTest {
 
     @Test
     fun powerStateReadsLevelAndCharging() {
-        val frame = Iap2Messages.buildRaw(Iap2IpodMessages.POWER_UPDATE) { u8(5, 1); u16(6, 73); u8(4, 1) }
+        val frame = Iap2Messages.buildRaw(Iap2IpodMessages.POWER_UPDATE) { u16(0, 980); u8(5, 1); u16(6, 73); u8(4, 1) }
         val state = Iap2IpodMessages.powerState(frame, IpodPowerState())
+        assertEquals(980, state.drawingMilliAmps)
+        assertEquals("battery 73% · charging · drawing 980 mA", state.describe())
         assertEquals(1, state.chargingState)
         assertEquals(73, state.batteryLevelPercent)
         assertEquals(true, state.externalChargerConnected)

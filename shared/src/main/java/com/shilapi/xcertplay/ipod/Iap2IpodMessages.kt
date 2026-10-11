@@ -40,11 +40,14 @@ data class IpodPowerState(
     val chargingState: Int? = null,          // 0 disconnected, 1 charging, 2 charged
     val batteryLevelPercent: Int? = null,
     val externalChargerConnected: Boolean? = null,
+    /** What the phone says it is drawing from the accessory, in mA (PowerUpdate parameter 0). */
+    val drawingMilliAmps: Int? = null,
 ) {
-    fun describe(): String = buildString {
-        batteryLevelPercent?.let { append("battery $it%") }
-        when (chargingState) { 1 -> append(" · charging"); 2 -> append(" · charged"); 0 -> append(" · not charging") }
-    }.trim().trimStart('·').trim()
+    fun describe(): String = listOfNotNull(
+        batteryLevelPercent?.let { "battery $it%" },
+        when (chargingState) { 1 -> "charging"; 2 -> "charged"; 0 -> "not charging"; else -> null },
+        drawingMilliAmps?.let { "drawing $it mA" },
+    ).joinToString(" · ")
 }
 
 /** Media-remote HID usages (Consumer page) the accessory can "press" on the iPhone. */
@@ -232,7 +235,7 @@ object Iap2IpodMessages {
         u8(1, 1) // DeviceBatteryShouldChargeIfPowerIsPresent
     }
 
-    fun startPowerUpdates(): Iap2Frame = Iap2Messages.buildRaw(START_POWER_UPDATES) { void(4); void(5); void(6) }
+    fun startPowerUpdates(): Iap2Frame = Iap2Messages.buildRaw(START_POWER_UPDATES) { void(0); void(4); void(5); void(6) }
 
     fun startNowPlayingUpdates(): Iap2Frame = Iap2Messages.buildRaw(START_NOW_PLAYING_UPDATES) {
         group(0) { listOf(1, 4, 6, 12, 16, 26).forEach(::void) }  // title, duration, album, artist, genre, artwork
@@ -276,6 +279,7 @@ object Iap2IpodMessages {
         val body = runCatching { Iap2BodyReader.of(frame) }.getOrNull() ?: return previous
         val level = runCatching { body.optionalU16(6) }.getOrNull()
         return previous.copy(
+            drawingMilliAmps = runCatching { body.optionalU16(0) }.getOrNull() ?: previous.drawingMilliAmps,
             chargingState = runCatching { body.optionalU8(5) }.getOrNull() ?: previous.chargingState,
             batteryLevelPercent = level?.let { if (it <= 100) it else (it * 100L / 65_535L).toInt() } ?: previous.batteryLevelPercent,
             externalChargerConnected = runCatching { body.optionalBool(4) }.getOrNull() ?: previous.externalChargerConnected,

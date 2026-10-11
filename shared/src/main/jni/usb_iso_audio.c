@@ -249,6 +249,21 @@ Java_com_shilapi_xcertplay_ipod_UsbIsoAudioNative_read(
     return 0;
 }
 
+/* Drops everything buffered so far; returns the number of bytes discarded. Used to shed startup
+ * backlog (packets that arrived while the output was being opened) so latency stays small. */
+JNIEXPORT jint JNICALL
+Java_com_shilapi_xcertplay_ipod_UsbIsoAudioNative_flush(JNIEnv *env, jobject receiver, jlong handle) {
+    (void) env; (void) receiver;
+    struct capture *c = (struct capture *) (intptr_t) handle;
+    if (c == NULL) return 0;
+    pthread_mutex_lock(&c->lock);
+    jint dropped = (jint) c->count;
+    c->head = c->tail = 0;
+    c->count = 0;
+    pthread_mutex_unlock(&c->lock);
+    return dropped;
+}
+
 JNIEXPORT jlongArray JNICALL
 Java_com_shilapi_xcertplay_ipod_UsbIsoAudioNative_stats(JNIEnv *env, jobject receiver, jlong handle) {
     (void) receiver;

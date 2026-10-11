@@ -39,7 +39,19 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.32)
+## Fork features (0.2.13-legacy24.33)
+
+24.33: iPod audio confirmed on the car; fullscreen; latency guard; charge readout
+- Fifth on-car report (24.32, iPhone 16 Pro Max): the full identity with 32/44.1/48 kHz
+  was accepted first time, the phone answered StartUSBDeviceModeAudio with 44.1 kHz and
+  the car played through the direct driver. The missing 32 kHz was the cause all along.
+- The same log showed ~1.3 s of packets buffered in the driver ring (captured while the
+  output was being opened) sitting in front of the music. The engine now flushes the
+  ring when playback starts and drops backlog above 250 ms (`UsbIsoAudioNative.flush`).
+- iPod screen is edge to edge: system bars hidden, swipe from the edge brings them back.
+- PowerUpdate parameter 0 (MaximumCurrentDrawnFromAccessory) is subscribed and shown as
+  "drawing N mA" next to the battery level, and logged with the announced current, so the
+  charging-current setting can be tuned against what the phone actually pulls.
 
 24.32: audio request sequencing and richer rejection logging
 - IdentificationRejected parameters are logged with length and raw hex
