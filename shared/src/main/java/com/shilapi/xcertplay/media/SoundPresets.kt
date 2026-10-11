@@ -69,6 +69,12 @@ object SoundPresets {
         ParametricBand.highShelf(9000, 2f),
     )
 
+    /** The audit's gentler correction: no shared top shelf when air or graphic treble is in use. */
+    private val AUDIT_CORRECTION = listOf(
+        ParametricBand.peak(170, -2f, 1.2f),
+        ParametricBand.peak(3200, -1.5f, 1.3f),
+    )
+
     val YARIS: List<Preset> = listOf(
         Preset(
             "Yaris · Rage", "Ken Carson / Nine / Vicious: 808s felt through harmonics, hi-hats forward, door boom tamed.",
@@ -79,12 +85,12 @@ object SoundPresets {
             loudnessComp = true, loudnessCompAmount = 50,
         ),
         Preset(
-            "Yaris · 808 Heavy", "Maximum low end the doors can take; the limiter keeps it from breaking up.",
+            "Yaris · 808 Heavy", "Maximum low end for the stock doors, with the digital peak limiter on. Protects the signal, not the speakers: back off if the doors rattle.",
             intArrayOf(-3, 6, 4, 1, -2, -1, 0, 1, 1, 2, 3, 2),
             parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 90, bassEnhanceHz = 100,
         ),
         Preset(
-            "Yaris · 808 Heavy Pure", "808 Heavy without the harmonic enhancer: the real sub-bass untouched below 100 Hz, limiter on.",
+            "Yaris · 808 Heavy Pure", "808 Heavy without the harmonic enhancer: the same bass curve, no synthetic harmonics, 40 Hz subsonic filter, limiter on.",
             intArrayOf(-3, 6, 4, 1, -2, -1, 0, 1, 1, 2, 3, 2),
             parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 0,
         ),
@@ -104,7 +110,7 @@ object SoundPresets {
             airDb = 2, deEss = 70,
         ),
         Preset(
-            "Yaris · Flat Corrected", "Only the cabin correction: honest sound, nothing boosted.",
+            "Yaris · Flat Corrected", "Only the cabin correction (door boom and tweeter edge tamed, +2 dB top shelf): no genre voicing, no limiter.",
             intArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
             parametric = YARIS_CORRECTION, subsonicHz = 28, limiter = false,
         ),
@@ -132,9 +138,30 @@ object SoundPresets {
             subsonicHz = 90, autoLevel = true, autoLevelAmount = 90,
         ),
         Preset(
-            "Yaris · Max Loud", "Everything as loud as it safely goes: full auto level up, limiter hard at work.",
+            "Yaris · Max Loud", "As loud as the limiter allows: full auto level, limiter hard at work. Digital protection only; mind the doors.",
             intArrayOf(-3, 3, 2, 1, -1, 0, 1, 2, 2, 2, 2, 1),
             parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 50, bassEnhanceHz = 100, autoLevel = true, autoLevelAmount = 100,
+        ),
+        // Retunes proposed by the October 2026 external DSP audit, kept next to the originals for
+        // A/B listening in the car: less stacked treble (no shared +2 dB shelf), a lighter 62 Hz
+        // lift, moderate harmonics, and a Podcast curve without the extra presence bell.
+        Preset(
+            "Yaris · Rage (Audit)", "Audit retune of Rage: about 3 dB less stacked treble, lighter 62 Hz, moderate harmonics, loudness off.",
+            intArrayOf(-4, 2, 2, 0, -1, 0, 0, 0, 1, 1, 1, 0),
+            parametric = AUDIT_CORRECTION, subsonicHz = 40, bassEnhance = 55, bassEnhanceHz = 85, autoLevel = false,
+            driverSeatDelayTenthsMs = YARIS_DRIVER_DELAY_TENTHS,
+            airDb = 1, airHz = 10000, deEss = 60,
+        ),
+        Preset(
+            "Yaris · 808 Heavy (Audit)", "Audit retune of 808 Heavy: 45 Hz subsonic, a 2 dB rather than 6 dB 62 Hz lift, harmonics at 65, limiter on.",
+            intArrayOf(-6, 2, 2, 0, -1, 0, 0, 0, 0, 1, 1, 0),
+            parametric = AUDIT_CORRECTION, subsonicHz = 45, bassEnhance = 65, bassEnhanceHz = 85,
+        ),
+        Preset(
+            "Yaris · Podcast (Audit)", "Audit retune of Podcast: 70 Hz high-pass keeps low voices, presence from the graphic bands only, auto level 75.",
+            intArrayOf(-6, -3, -1, 0, 0, 0, 1, 1, 0, 0, -1, -2),
+            parametric = listOf(ParametricBand.peak(170, -1.5f, 1.2f)),
+            subsonicHz = 70, autoLevel = true, autoLevelAmount = 75,
         ),
     )
 }
