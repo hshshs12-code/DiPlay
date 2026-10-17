@@ -824,6 +824,7 @@ class DiPlayActivity : ComponentActivity() {
                     if (reconnect) reconnectForClusterMap()
                 }
             }
+            sub("Keep the car's Bluetooth music off during CarPlay (friend build)", "These units auto-connect their own Bluetooth music profile to the phone, and iOS then keeps playing over Bluetooth instead of CarPlay. While CarPlay runs, the phone's A2DP is disconnected and parked; calls still use hands-free. Restored when the session ends.", "bt_music_guard", reconnect = false) { AirPlayPersistence.saveBluetoothMusicGuard(this, it) }
             sub("Uncompressed music (PCM)", "Offers the iPhone only PCM for music so the head unit decodes nothing (as Open Headunit does for Android Auto). About 1.5 Mbit/s. If music goes silent the iPhone refused: turn it off.", "prefer_pcm_audio") { AirPlayPersistence.savePreferPcmAudio(this, it) }
             sub("Legacy music stream routing", "Plays music on Android's classic STREAM_MUSIC route instead of usage-based attributes, the path Open Headunit uses.", "legacy_music_route") { AirPlayPersistence.saveLegacyMusicRoute(this, it) }
             sub("Low-latency audio track", "Requests Android's low-latency output mode for music.", "low_latency_audio_track") { AirPlayPersistence.saveLowLatencyAudioTrack(this, it) }

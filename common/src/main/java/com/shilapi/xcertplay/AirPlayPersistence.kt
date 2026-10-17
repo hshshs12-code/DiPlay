@@ -193,6 +193,7 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(key, enabled).apply()
     }
     fun loadLegacyMusicRoute(context: Context) = tuned(context, "legacy_music_route")
+    fun saveBluetoothMusicGuard(context: Context, enabled: Boolean) = saveTuned(context, "bt_music_guard", enabled)
     fun saveLegacyMusicRoute(context: Context, enabled: Boolean) = saveTuned(context, "legacy_music_route", enabled)
     fun loadSustainedPerformance(context: Context) = tuned(context, "sustained_performance")
     fun saveSustainedPerformance(context: Context, enabled: Boolean) = saveTuned(context, "sustained_performance", enabled)

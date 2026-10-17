@@ -38,7 +38,15 @@ What differs from the main line (everything else is 24.38):
   and the diagnostic report pulls the head unit's `wpa_supplicant` / Wi-Fi P2P logcat and
   `dumpsys wifip2p` over local ADB when "ADB over network" is on, which shows the group's real
   frequency (`P2P-GROUP-STARTED … freq=`) and every association attempt.
-- Version `0.2.13-legacy24.38-friend3`, published as a pre-release.
+- **friend4 — after the first success.** It connected once the owner pressed "Reset Wi-Fi
+  Direct" in the app: a leftover group with a platform-chosen name was blocking every start, and
+  the ownership check only reclaims groups it named itself (impossible below Android 10). The
+  friend build now reclaims any leftover group this unit owns by itself. Music then played over
+  the car's own Bluetooth instead of CarPlay: these units auto-connect their A2DP sink to the
+  phone and iOS keeps that route. `BluetoothMusicGuard` disconnects and parks the phone's A2DP
+  while a CarPlay session is active (hands-free stays for calls) and restores it afterwards;
+  Settings → Audio path has the switch.
+- Version `0.2.13-legacy24.38-friend4`, published as a pre-release.
 
 If Wi-Fi Direct never works on this unit, the remaining options need no build: **Built-in car
 hotspot** (turn the head unit's own hotspot on in Android settings and save its name and

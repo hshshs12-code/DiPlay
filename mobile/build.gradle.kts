@@ -18,7 +18,7 @@ android {
         minSdk = 24
         targetSdk = 37
         versionCode = 68
-        versionName = "0.2.13-legacy24.38-friend3"
+        versionName = "0.2.13-legacy24.38-friend4"
 
     }
 

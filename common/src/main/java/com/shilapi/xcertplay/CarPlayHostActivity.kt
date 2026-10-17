@@ -1320,6 +1320,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        BluetoothMusicGuard.onCarPlayEnded(this, ::appendLog)
         if (audioPathStarted) { audioPathStarted = false; runCatching { AudioPath.onSessionEnd(this) } }
         runCatching { sessionWakeLock?.let { if (it.isHeld) it.release() } }; sessionWakeLock = null
         resetSidePanel()
@@ -3883,6 +3884,7 @@ class CarPlayHostActivity : ComponentActivity() {
                     }
                     activeAirPlaySession = session
                     CarPlayBackgroundSession.active = true
+                    BluetoothMusicGuard.onCarPlayActive(this@CarPlayHostActivity, ::appendLog)
                     reconnectAttempts = 0
                     logThemeState(ThemeModeDiagnostics.Source.SESSION_ACTIVE, resources.configuration)
                     syncAirPlayDarkMode(ThemeModeDiagnostics.Source.SESSION_ACTIVE)
@@ -3918,6 +3920,7 @@ class CarPlayHostActivity : ComponentActivity() {
                     startupRetryBudget.disconnected()
                     activeAirPlaySession = null
                     CarPlayBackgroundSession.active = false
+                    BluetoothMusicGuard.onCarPlayEnded(this@CarPlayHostActivity, ::appendLog)
                     if (menuOpen) {
                         recoveryPendingAfterMenu = true
                         return@runOnUiThread

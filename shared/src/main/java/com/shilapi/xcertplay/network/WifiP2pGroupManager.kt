@@ -164,9 +164,14 @@ class WifiP2pGroupManager(
             if (existing != null) {
                 if (!P2pOwnership.canReclaim(existing.isGroupOwner, existing.networkName,
                         ownership.getString("owned_ssid", null), ssidPrefix)) {
-                    throw P2pResetRequiredException()
-                }
-                diagnostic("Wi-Fi P2P reclaiming retained owned group")
+                    // Friend build: below Android 10 the platform names every group itself, so a
+                    // group this unit owns is ours whatever it is called; a leftover one blocks the
+                    // next start until the owner manually resets it. Only a group we merely joined
+                    // still needs the manual reset.
+                    if (legacyChannels && existing.isGroupOwner) {
+                        diagnostic("Wi-Fi P2P reclaiming a leftover owner group with a platform-chosen name")
+                    } else throw P2pResetRequiredException()
+                } else diagnostic("Wi-Fi P2P reclaiming retained owned group")
                 removeGroupBlocking(p2pChannel, existing.networkName)
                 val removalDeadline = minOf(deadlineNanos, deadlineAfter(REMOVE_GROUP_TIMEOUT_MILLIS))
                 while (requestGroupInfo(attempt, p2pChannel, REQUEST_POLL_NANOS, requireResponse = true) != null) {
