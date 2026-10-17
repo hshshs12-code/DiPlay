@@ -133,7 +133,7 @@ class WifiP2pGroupManager(
             val preferred = remembered?.takeIf {
                 preferredChannel == WifiP2pChannels.AUTO && it.stationMHz == stationFrequency
             }
-            diagnostic("Wi-Fi P2P channel preference=${if (preferredChannel == WifiP2pChannels.AUTO) "auto" else preferredChannel} " +
+            diagnostic("Wi-Fi P2P channel preference=${when (preferredChannel) { WifiP2pChannels.AUTO -> "auto"; WifiP2pChannels.SYSTEM_DEFAULT -> "system_default"; else -> preferredChannel.toString() }} " +
                 "frequencyMHz=${WifiP2pChannels.frequencyMhz(preferredChannel) ?: "auto"}")
             diagnostic(when {
                 preferredChannel != WifiP2pChannels.AUTO -> "Wi-Fi P2P remembered skipped=manual_channel"
@@ -257,7 +257,7 @@ class WifiP2pGroupManager(
                     "actualMHz=unavailable matched=unverified")
             } else {
                 diagnostic("Wi-Fi P2P channel requestedMHz=${creation.frequencyMHz ?: "auto"} actualMHz=${group.frequencyMHz} matched=${creation.frequencyMHz?.let { it == group.frequencyMHz } ?: "system_selected"}")
-                if (preferredChannel != WifiP2pChannels.AUTO && group.frequencyMHz != creation.frequencyMHz) {
+                if (preferredChannel != WifiP2pChannels.AUTO && preferredChannel != WifiP2pChannels.SYSTEM_DEFAULT && group.frequencyMHz != creation.frequencyMHz) {
                     throw P2pChannelUnavailableException(preferredChannel,
                         "The car selected channel ${group.channel} instead.")
                 }
@@ -604,21 +604,35 @@ class WifiP2pGroupManager(
             }
 
             // Below API 29 the platform never reports the group channel. The iPhone rejects a
-            // Wi-Fi configuration that says channel 0, so when no channel was pinned, read the
-            // live channel from a scan of the group's own SSID or fall back to the station channel.
+            // Wi-Fi configuration that says channel 0, and a pinned channel is only a request the
+            // driver may ignore (MediaTek 8227L units accept the pin and still put the group where
+            // they like). Always look for the group's own beacons in a fresh scan: an observed
+            // channel beats both an unverified pin and a guess. The iPhone scans the channel it is
+            // told, so a wrong one means it never joins.
             var requestedChannel = creation.frequencyMHz
                 ?.let(WifiP2pLegacyChannels::operatingChannelFor) ?: UNKNOWN_CHANNEL
             var reportedFrequencyMHz = creation.frequencyMHz
-            if (requestedChannel == UNKNOWN_CHANNEL) {
-                val observed = fallbackGroupFrequencyMHz(networkName)
-                val observedChannel = if (observed > 0) wifiFrequencyMhzToChannel(observed) else null
-                if (observedChannel != null) {
-                    requestedChannel = observedChannel
-                    reportedFrequencyMHz = observed
+            val observed = observeGroupFrequencyMHz(networkName, deadlineNanos)
+            val observedChannel = if (observed > 0) wifiFrequencyMhzToChannel(observed) else null
+            when {
+                observedChannel != null && requestedChannel == UNKNOWN_CHANNEL -> {
+                    requestedChannel = observedChannel; reportedFrequencyMHz = observed
                     diagnostic("Wi-Fi P2P legacy channel observed frequencyMHz=$observed channel=$observedChannel")
-                } else {
-                    diagnostic("Wi-Fi P2P legacy channel unknown; the iPhone must scan for the group")
                 }
+                observedChannel != null && observedChannel != requestedChannel -> {
+                    diagnostic("Wi-Fi P2P legacy channel mismatch requested=$requestedChannel observed=$observedChannel frequencyMHz=$observed; advertising the observed channel")
+                    requestedChannel = observedChannel; reportedFrequencyMHz = observed
+                }
+                observedChannel != null -> diagnostic("Wi-Fi P2P legacy channel verified by scan channel=$observedChannel")
+                requestedChannel == UNKNOWN_CHANNEL -> {
+                    val station = fallbackGroupFrequencyMHz(networkName)
+                    val stationChannel = if (station > 0) wifiFrequencyMhzToChannel(station) else null
+                    if (stationChannel != null) {
+                        requestedChannel = stationChannel; reportedFrequencyMHz = station
+                        diagnostic("Wi-Fi P2P legacy channel not scanned; a single radio shares the station channel $stationChannel")
+                    } else diagnostic("Wi-Fi P2P legacy channel unknown; the iPhone must scan for the group")
+                }
+                else -> diagnostic("Wi-Fi P2P legacy channel not seen in a scan; advertising the requested channel $requestedChannel unverified")
             }
             return WirelessHotspotInfo(
                 ssid = networkName,
@@ -647,6 +661,34 @@ class WifiP2pGroupManager(
      * for the group's own SSID is exact when present; otherwise the station channel is the best
      * answer because AOSP normally places the group owner on it. 0 makes the iPhone scan instead.
      */
+    /**
+     * Starts a station scan and waits up to [SCAN_OBSERVE_MILLIS] for the group's own SSID to show
+     * up with a timestamp from after the scan began; a stale result is used only as a last resort.
+     */
+    private fun observeGroupFrequencyMHz(groupSsid: String, deadlineNanos: Long): Int {
+        val wifi = runCatching { appContext.getSystemService(WifiManager::class.java) }.getOrNull() ?: return 0
+        val startedMicros = android.os.SystemClock.elapsedRealtime() * 1000
+        @Suppress("DEPRECATION")
+        val scanStarted = runCatching { wifi.startScan() }.getOrDefault(false)
+        diagnostic("Wi-Fi P2P legacy channel scan started=$scanStarted ssid=$groupSsid")
+        val scanDeadline = minOf(deadlineNanos, deadlineAfter(SCAN_OBSERVE_MILLIS))
+        var stale = 0
+        while (true) {
+            @Suppress("DEPRECATION")
+            val results = runCatching { wifi.scanResults }.getOrNull().orEmpty()
+            val match = results.firstOrNull { it.SSID == groupSsid && it.frequency > 0 }
+            if (match != null) {
+                if (!scanStarted || match.timestamp >= startedMicros) return match.frequency
+                stale = match.frequency
+            }
+            if (remainingNanos(scanDeadline) <= 0) {
+                if (stale > 0) diagnostic("Wi-Fi P2P legacy channel scan only found a stale result frequencyMHz=$stale")
+                return stale
+            }
+            synchronized(stateLock) { waitNanos(TimeUnit.MILLISECONDS.toNanos(500)) }
+        }
+    }
+
     private fun fallbackGroupFrequencyMHz(groupSsid: String?): Int {
         val wifi = runCatching { appContext.getSystemService(WifiManager::class.java) }.getOrNull()
         val scanned = runCatching {
@@ -967,6 +1009,8 @@ class WifiP2pGroupManager(
         const val TAG = "xcertplay-usb"
         const val NANOS_PER_MILLISECOND = 1_000_000L
         const val REMOVE_GROUP_TIMEOUT_MILLIS = 2_000L
+        /** How long to wait for a fresh scan to show the group's own beacons below API 29. */
+        const val SCAN_OBSERVE_MILLIS = 5_000L
         const val UNKNOWN_CHANNEL = 0
         val REQUEST_POLL_NANOS: Long = TimeUnit.MILLISECONDS.toNanos(500)
         const val TOKEN_ALPHABET =

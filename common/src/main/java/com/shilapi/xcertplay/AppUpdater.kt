@@ -25,14 +25,24 @@ object AppUpdater {
     fun currentVersion(context: Context): String =
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0"
 
-    /** GitHub's latest non-prerelease, non-draft release with its first .apk asset. */
+    /** Tag marker of this build line; only releases carrying it are offered, so the main line never replaces it. */
+    const val LINE_TAG = "friend"
+
+    /** The newest GitHub release (pre-releases included) whose tag belongs to this build line, with its first .apk asset. */
     fun latestRelease(): Release {
-        val connection = open("https://api.github.com/repos/$REPO/releases/latest")
+        val connection = open("https://api.github.com/repos/$REPO/releases?per_page=30")
         try {
             val code = connection.responseCode
             if (code == 404) error("No release published yet")
             if (code != 200) error("GitHub answered HTTP $code")
-            val json = JSONObject(connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
+            val list = org.json.JSONArray(connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
+            var json: JSONObject? = null
+            for (index in 0 until list.length()) {
+                val candidate = list.getJSONObject(index)
+                if (candidate.optBoolean("draft")) continue
+                if (candidate.getString("tag_name").contains(LINE_TAG, ignoreCase = true)) { json = candidate; break }
+            }
+            if (json == null) error("No $LINE_TAG build published yet")
             val tag = json.getString("tag_name")
             val assets = json.optJSONArray("assets")
             var apk: JSONObject? = null

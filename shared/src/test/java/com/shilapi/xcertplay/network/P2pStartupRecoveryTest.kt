@@ -18,6 +18,22 @@ class P2pStartupRecoveryTest {
             P2pStartupRecovery.plan(5200, remembered, preferredChannel = WifiP2pChannels.AUTO))
     }
 
+    @Test fun systemDefaultPreferenceSkipsEveryPinnedChannel() {
+        assertEquals(listOf(P2pCreationRequest(P2pCreationMode.SYSTEM_DEFAULT)),
+            P2pStartupRecovery.plan(2437, P2pCreationRequest(P2pCreationMode.FIXED_2_GHZ, 2437), preferredChannel = WifiP2pChannels.SYSTEM_DEFAULT))
+        assertTrue(WifiP2pChannels.isValid(WifiP2pChannels.SYSTEM_DEFAULT))
+        assertNull(WifiP2pChannels.frequencyMhz(WifiP2pChannels.SYSTEM_DEFAULT))
+        val attempts = mutableListOf<P2pCreationMode>()
+        val failure = assertThrows(P2pChannelUnavailableException::class.java) {
+            P2pStartupRecovery.create(null, { fail("Unexpected fallback") }, preferredChannel = WifiP2pChannels.SYSTEM_DEFAULT) {
+                attempts += it.mode
+                throw P2pCreateRejected(WifiP2pManager.ERROR, "rejected")
+            }
+        }
+        assertEquals(listOf(P2pCreationMode.SYSTEM_DEFAULT), attempts)
+        assertTrue(failure.message!!.contains("car's own settings"))
+    }
+
     @Test fun rejectedManualChannelNeverFallsBackToAnotherChannel() {
         val attempts = mutableListOf<Int?>()
         val rejection = P2pCreateRejected(WifiP2pManager.ERROR, "rejected")

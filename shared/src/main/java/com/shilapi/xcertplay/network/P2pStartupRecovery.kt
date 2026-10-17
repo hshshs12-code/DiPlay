@@ -26,6 +26,10 @@ internal object P2pStartupRecovery {
     /** A band-only request still needs channel selection, which some BYD drivers cannot do. */
     fun plan(stationFrequency: Int?, preferred: P2pCreationRequest? = null,
              preferredChannel: Int = WifiP2pChannels.AUTO): List<P2pCreationRequest> = buildList {
+        if (preferredChannel == WifiP2pChannels.SYSTEM_DEFAULT) {
+            add(P2pCreationRequest(P2pCreationMode.SYSTEM_DEFAULT))
+            return@buildList
+        }
         WifiP2pChannels.frequencyMhz(preferredChannel)?.let {
             add(P2pCreationRequest(P2pCreationMode.PREFERRED_CHANNEL, it))
             return@buildList

@@ -1450,6 +1450,8 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun wifiDirectChannelLabel(channel: Int): String = if (channel == WifiP2pChannels.AUTO) {
         getString(R.string.auto)
+    } else if (channel == WifiP2pChannels.SYSTEM_DEFAULT) {
+        "Let the car pick (no channel pin)"
     } else {
         getString(R.string.wifi_direct_channel_choice, channel,
             getString(if (channel < 36) R.string.s_2_4_ghz else R.string.s_5_ghz))
@@ -1461,7 +1463,7 @@ class DiPlayActivity : ComponentActivity() {
         }
         val control = button(summary(AirPlayPersistence.loadWifiP2pPreferredChannel(this)), false) {}
         control.setOnClickListener {
-            val choices = listOf(WifiP2pChannels.AUTO) + WifiP2pChannels.channels
+            val choices = listOf(WifiP2pChannels.AUTO, WifiP2pChannels.SYSTEM_DEFAULT) + WifiP2pChannels.channels
             val current = AirPlayPersistence.loadWifiP2pPreferredChannel(this)
             var selection = current
             AlertDialog.Builder(this).setTitle(R.string.wifi_direct_channel_title)
@@ -1470,6 +1472,7 @@ class DiPlayActivity : ComponentActivity() {
                 .setPositiveButton(R.string.save) { _, _ ->
                     if (selection != current) {
                         AirPlayPersistence.saveWifiP2pPreferredChannel(this, selection)
+                        WirelessFallback.reset(this)
                         control.text = summary(selection)
                         toast(getString(R.string.saved_for_your_next_connection))
                     }
@@ -1480,6 +1483,9 @@ class DiPlayActivity : ComponentActivity() {
         parent.addView(control, matchButton(12, 60))
         parent.addView(label(getString(R.string.wifi_direct_channel_description), 15, MUTED).apply {
             setPadding(0, dp(6), 0, dp(12))
+        })
+        parent.addView(label("Friend build: the live channel is read from a scan of the group's own beacons and sent to the iPhone (a pinned channel is only a request). After every ${WirelessFallback.TIMEOUTS_PER_STEP} failed starts the strategy moves on by itself: ${WirelessFallback.LADDER.joinToString(" → ") { WirelessFallback.label(it) }}. Failed starts so far: ${WirelessFallback.streak(this)}.", 14, MUTED).apply {
+            setPadding(0, 0, 0, dp(12))
         })
     }
 
