@@ -629,7 +629,7 @@ class WifiP2pGroupManager(
                     val stationChannel = if (station > 0) wifiFrequencyMhzToChannel(station) else null
                     if (stationChannel != null) {
                         requestedChannel = stationChannel; reportedFrequencyMHz = station
-                        diagnostic("Wi-Fi P2P legacy channel not scanned; a single radio shares the station channel $stationChannel")
+                        diagnostic("Wi-Fi P2P legacy channel observed frequencyMHz=$station channel=$stationChannel (station channel; a single radio shares it with the group)")
                     } else diagnostic("Wi-Fi P2P legacy channel unknown; the iPhone must scan for the group")
                 }
                 else -> diagnostic("Wi-Fi P2P legacy channel not seen in a scan; advertising the requested channel $requestedChannel unverified")
