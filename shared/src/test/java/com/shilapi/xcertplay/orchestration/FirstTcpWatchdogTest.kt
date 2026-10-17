@@ -35,7 +35,7 @@ class FirstTcpWatchdogTest {
         watch.startSessionSent(0)
         now = 20_000
         watch.startSessionSent(now * 1_000_000)
-        assertEquals(30_000L, deadline)
+        assertEquals(com.shilapi.xcertplay.network.WirelessStartupPolicy.FIRST_TCP_MILLIS, deadline)
         now = 30_000
         timer!!()
         assertEquals(1, failures)

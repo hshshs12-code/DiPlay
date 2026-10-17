@@ -20,7 +20,15 @@ What differs from the main line (everything else is 24.38):
   logged as `wireless fallback: …`.
 - **Updater** only offers releases whose tag contains `friend`, so the main line's releases never
   replace this build; the main line's updater ignores pre-releases, so the reverse holds too.
-- Version `0.2.13-legacy24.38-friend1`, published as a pre-release.
+- **90 s join window** instead of 30 s before a start counts as failed: accepting the CarPlay
+  prompt and leaving a home Wi-Fi can take the phone longer than that on 2.4 GHz.
+- **The group survives one retry.** After a first-TCP timeout the Wi-Fi Direct group is kept
+  (same name, password and channel) for the next attempt, so a phone that joins late still lands
+  on valid credentials; the attempt after that rebuilds the group on the ladder's next strategy.
+- **Neighbour table in the log.** Every 10 s snapshot now carries `neighbours=N complete=M`
+  for the group interface: a complete entry means the iPhone associated and exchanged ARP, so
+  the log tells "never joined" apart from "joined but no CarPlay TCP".
+- Version `0.2.13-legacy24.38-friend2`, published as a pre-release.
 
 If Wi-Fi Direct never works on this unit, the remaining options need no build: **Built-in car
 hotspot** (turn the head unit's own hotspot on in Android settings and save its name and

@@ -245,6 +245,12 @@ class CarPlayController(
         activeSession?.sendRemoteControlMessage(streamId, message) ?: false
 
     @Volatile private var hotspot: WirelessHotspotManager? = null
+    // Friend build: a Wi-Fi Direct group kept alive across one first-TCP retry, so the iPhone's
+    // saved credentials stay valid while it is still deciding to join.
+    @Volatile private var retainedHotspot: WirelessHotspotManager? = null
+    @Volatile private var retainedHotspotInfo: WirelessHotspotInfo? = null
+    @Volatile private var activeHotspotInfo: WirelessHotspotInfo? = null
+    @Volatile private var retainedUses = 0
     @Volatile private var wifiScanPause: WifiScanPause? = null
     @Volatile private var bonjour: CarPlayBonjour? = null
     private val wirelessResourceLock = Any()
@@ -1120,7 +1126,7 @@ class CarPlayController(
     private fun runWireless(generation: Int) {
         try {
             debugLog("wireless bring-up generation=$generation starting")
-            closeWirelessStack(generation = generation)
+            closeWirelessStack(vpnService, generation, keepHotspot = retainedHotspot != null)
             if (
                 closed ||
                 phase != Phase.WIRELESS ||
@@ -1141,7 +1147,9 @@ class CarPlayController(
                     if (!closed && generation == wirelessGeneration.get()) {
                         fail(WirelessStartupException(WirelessStartupFailure.FIRST_TCP_TIMEOUT,
                             "No AirPlay TCP after CarPlay StartSession"), generation)
-                        Thread({ closeWirelessStack(generation = generation) }, "diplay-startup-cleanup")
+                        val keep = retainedUses < 1 && activeHotspotInfo?.backend == WirelessHotspotBackend.WIFI_P2P
+                        if (keep) debugLog("wireless startup: keeping the Wi-Fi Direct group alive for the next attempt (same name, same password, same channel)")
+                        Thread({ closeWirelessStack(vpnService, generation, keepHotspot = keep) }, "diplay-startup-cleanup")
                             .apply { isDaemon = true; start() }
                     }
                 },
@@ -1190,6 +1198,7 @@ class CarPlayController(
                 sample = {
                     "${WirelessInterfaceDiagnostics.snapshot(hotspotInfo.interfaceName)} " +
                         "${startedHotspot?.connectionDiagnosticSnapshot() ?: "association=unknown"} " +
+                        "${com.shilapi.xcertplay.network.NeighbourDiagnostics.snapshot(hotspotInfo.interfaceName)} " +
                         (startedBonjour?.diagnosticSnapshot() ?: "bonjour=not_started") + "\n" +
                         receiveDiagnostics.snapshot()
                 },
@@ -1531,6 +1540,7 @@ class CarPlayController(
 
             override fun onSessionActive(session: AirPlaySession) {
                 if (isStaleWirelessRun(generation) || !watchdog.sessionEstablished()) return
+                retainedUses = 0
                 wirelessDiagnostics?.let {
                     it.sessionActive()
                     it.close()
@@ -2076,6 +2086,27 @@ class CarPlayController(
     private fun startWirelessHotspot(generation: Int): WirelessHotspotInfo {
         val readyDeadline = System.nanoTime() + WirelessStartupPolicy.HOTSPOT_READY_MILLIS * 1_000_000
         val hotspotMode = config.wirelessHotspotMode
+        retainedHotspot?.let { kept ->
+            retainedHotspot = null
+            val info = retainedHotspotInfo
+            retainedHotspotInfo = null
+            val usable = hotspotMode == WirelessHotspotMode.WIFI_P2P && info != null &&
+                runCatching { kept.validateReady() }.isSuccess
+            if (usable) {
+                retainedUses++
+                synchronized(wirelessResourceLock) {
+                    if (isStaleWirelessRun(generation)) {
+                        kept.close()
+                        throw java.io.InterruptedIOException("Hotspot startup cancelled")
+                    }
+                    hotspot = kept
+                }
+                activeHotspotInfo = info
+                debugLog("wireless hotspot retained across retry use=$retainedUses ssid=${info!!.ssid} channel=${info.channel}")
+                return info
+            }
+            closeBestEffort("retained hotspot") { kept.close() }
+        }
         if (com.shilapi.xcertplay.network.CarHotspotSettings.shouldEnable(
                 appContext, config.transport == CarPlayTransport.WIRELESS, hotspotMode,
             )
@@ -2143,7 +2174,7 @@ class CarPlayController(
             HOTSPOT_START_TIMEOUT_MILLIS
         }
         return try {
-            manager.start(timeoutMillis)
+            manager.start(timeoutMillis).also { activeHotspotInfo = it; retainedUses = 0 }
         } catch (failure: Exception) {
             if (hotspot === manager) hotspot = null
             closeBestEffort(hotspotMode.name) { manager.close() }
@@ -2280,7 +2311,11 @@ class CarPlayController(
         }
     }
 
+    // Two-argument form kept for the reflective startup test and every caller that does not retain the group.
     private fun closeWirelessStack(service: CarPlayVpnService? = vpnService, generation: Int? = null) =
+        closeWirelessStack(service, generation, keepHotspot = false)
+
+    private fun closeWirelessStack(service: CarPlayVpnService?, generation: Int?, keepHotspot: Boolean) =
         synchronized(wirelessResourceLock) {
             if (generation != null && generation != wirelessGeneration.get()) return@synchronized
             val owner = firstTcpWatchdog?.listener
@@ -2302,7 +2337,16 @@ class CarPlayController(
 
             val activeHotspot = hotspot
             hotspot = null
-            if (activeHotspot != null) closeBestEffort("wireless hotspot") { activeHotspot.close() }
+            if (keepHotspot && activeHotspot != null && retainedHotspot == null) {
+                retainedHotspot = activeHotspot
+                retainedHotspotInfo = activeHotspotInfo
+            } else if (activeHotspot != null) closeBestEffort("wireless hotspot") { activeHotspot.close() }
+            if (!keepHotspot) {
+                val kept = retainedHotspot
+                retainedHotspot = null; retainedHotspotInfo = null; retainedUses = 0
+                if (kept != null) closeBestEffort("retained wireless hotspot") { kept.close() }
+            }
+            activeHotspotInfo = null
             wirelessRuntimeIdentification = null
             wirelessAirPlayEndpoint = null
             wirelessHandoffRequested.set(false)
