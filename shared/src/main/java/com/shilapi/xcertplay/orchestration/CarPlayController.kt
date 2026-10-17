@@ -116,6 +116,8 @@ sealed class CarPlayStatus {
         val bssid: String,
         val address: String,
         val backend: String,
+        /** Friend build: shown on screen so a second phone can try to join the group by hand. */
+        val passphrase: String = "",
     ) : CarPlayStatus()
     data object WaitingForPairedIphone : CarPlayStatus()
     data object ConnectingBluetooth : CarPlayStatus()
@@ -134,7 +136,9 @@ sealed class CarPlayStatus {
     data object RunningControl : CarPlayStatus()
     data object ControlEnded : CarPlayStatus()
     data class Failed(val message: String, val wifiResetRequired: Boolean = false,
-        val startupFailure: WirelessStartupFailure? = null) : CarPlayStatus()
+        val startupFailure: WirelessStartupFailure? = null,
+        /** The run had sent StartSession and the iPhone never opened a TCP connection before this failure. */
+        val afterStartSession: Boolean = false) : CarPlayStatus()
 }
 
 internal fun isWirelessHandoffInProgress(
@@ -1213,6 +1217,7 @@ class CarPlayController(
                     bssid = deviceIdentifier,
                     address = hostAddressText,
                     backend = hotspotInfo.backend.label,
+                    passphrase = hotspotInfo.passphrase,
                 ),
             )
             onStatus(CarPlayStatus.WaitingForPairedIphone)
@@ -2576,6 +2581,7 @@ class CarPlayController(
         synchronized(wirelessResourceLock) {
             if (closed || generation != null && generation != wirelessGeneration.get()) return
             val wireless = config.transport == CarPlayTransport.WIRELESS
+            val afterStart = wireless && firstTcpWatchdog?.awaitingFirstTcp == true
             if (wireless) {
                 if (!wirelessFailureReported.compareAndSet(false, true)) return
                 firstTcpWatchdog?.terminate()
@@ -2583,7 +2589,8 @@ class CarPlayController(
             val causes = generateSequence(error) { it.cause }.toList()
             onStatus(CarPlayStatus.Failed(error.message ?: error.javaClass.simpleName,
                 causes.any { it is com.shilapi.xcertplay.network.P2pResetRequiredException },
-                causes.filterIsInstance<WirelessStartupException>().firstOrNull()?.reason),
+                causes.filterIsInstance<WirelessStartupException>().firstOrNull()?.reason,
+                afterStartSession = afterStart),
                 if (wireless) wirelessGeneration.get() else null)
         }
     }

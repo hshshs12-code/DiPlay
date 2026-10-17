@@ -3420,6 +3420,22 @@ class DiPlayActivity : ComponentActivity() {
         appendLine("--- Audio path ---")
         appendLine(runCatching { AudioPath.describe(appContext) }.getOrDefault("unavailable"))
         appendLine()
+        appendLine("--- Wireless fallback (friend build) ---")
+        appendLine("hotspotMode=${AirPlayPersistence.loadWirelessHotspotMode(appContext)} channelStrategy=${WirelessFallback.label(AirPlayPersistence.loadWifiP2pPreferredChannel(appContext))} failedJoinsSinceLastSuccess=${WirelessFallback.streak(appContext)}")
+        appendLine()
+        appendLine("--- Head-unit Wi-Fi Direct logcat over ADB (friend build) ---")
+        runCatching {
+            val outcome = UsbCompetitors.runAdb(appContext, listOf(
+                "logcat -d -t 1500 -s wpa_supplicant:V wpa_supplicant_p2p:V WifiP2pService:V P2pStateMachine:V WifiP2pServiceImpl:V WifiP2pNative:V WifiStateMachine:I WifiService:I",
+                "dumpsys wifip2p",
+            ))
+            if (outcome.access != com.shilapi.xcertplay.adb.LocalAdb.Access.READY) {
+                appendLine("ADB ${outcome.access}: enable \"ADB over network\" (or USB debugging with TCP port 5555) in the head unit's developer settings and approve DiPlay once; the supplicant log then shows the group's real frequency and every association attempt.")
+            } else outcome.lines.forEach { block ->
+                block.lines().forEach { line -> DiagnosticRedactor.redactLogcat(line)?.let { appendLine(it) } }
+            }
+        }.onFailure { appendLine("ADB capture failed: ${it.javaClass.simpleName}") }
+        appendLine()
         appendLine("--- Recent own-app process exits (Android 11+) ---")
             appendLine(ProcessExitDiagnostics.report(appContext))
             appendLine()

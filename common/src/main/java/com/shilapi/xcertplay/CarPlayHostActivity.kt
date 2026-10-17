@@ -3350,6 +3350,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 band = status.band,
                 channel = status.channel,
                 backend = status.backend,
+                passphrase = status.passphrase.takeIf { it.isNotEmpty() },
             )
             CarPlayStatus.WaitingForPairedIphone ->
                 hotspotStatus.copy(state = getString(R.string.waiting_for_paired_iphone))
@@ -3381,6 +3382,9 @@ class CarPlayHostActivity : ComponentActivity() {
             status.channel?.let {
                 append(getString(R.string.hotspot_channel_prefix)).append(if (it == 0) getString(R.string.auto_label) else it.toString())
             }
+            // Friend build: lets a second phone or laptop try to join the group by hand, which
+            // tells a group nobody can see apart from one the iPhone alone refuses.
+            status.passphrase?.let { append("\nPassword (friend build, for testing with another phone): ").append(it) }
         }
     }
 
@@ -3984,7 +3988,7 @@ class CarPlayHostActivity : ComponentActivity() {
                     if (startupFailureGeneration == controllerGeneration) return@report
                     startupFailureGeneration = controllerGeneration
                 }
-                reconnectAfterLoss(description, status.startupFailure)
+                reconnectAfterLoss(description, status.startupFailure, joinFailed = status.afterStartSession)
             }
             else -> Unit
         }
@@ -4439,12 +4443,14 @@ class CarPlayHostActivity : ComponentActivity() {
         startCarPlay(size)
     }
 
-    private fun reconnectAfterLoss(reason: String, startupFailure: WirelessStartupFailure? = null) {
+    private fun reconnectAfterLoss(reason: String, startupFailure: WirelessStartupFailure? = null, joinFailed: Boolean = false) {
         if (!CarPlayBackgroundSession.isOwner(this)) return
         if (menuOpen) recoveryPendingAfterMenu = true
         if (shuttingDown.get() || menuOpen || handshakeResetInProgress || startupRetryStopped) return
         if (reconnectScheduled) return
-        if (startupFailure == WirelessStartupFailure.FIRST_TCP_TIMEOUT && wirelessHotspotMode == WirelessHotspotMode.WIFI_P2P) {
+        // A Bluetooth drop after StartSession is the iPhone giving up on the group: count it like a timeout.
+        if ((startupFailure == WirelessStartupFailure.FIRST_TCP_TIMEOUT || joinFailed) && wirelessHotspotMode == WirelessHotspotMode.WIFI_P2P) {
+            if (startupFailure != WirelessStartupFailure.FIRST_TCP_TIMEOUT) appendLog("wireless fallback: the link failed after StartSession without a TCP connection; counting it as a failed join")
             WirelessFallback.onFirstTcpTimeout(this, ::appendLog)
         }
         val startupDelay = if (startupFailure != null && startupFailure != WirelessStartupFailure.HOTSPOT_CONFIGURATION)
@@ -4963,7 +4969,8 @@ class CarPlayHostActivity : ComponentActivity() {
         is CarPlayStatus.HotspotReady ->
             if (wirelessHotspotMode == WirelessHotspotMode.EXISTING_WIFI) {
                 getString(R.string.existing_wifi_ready, ssid, band, channel, address)
-            } else getString(R.string.status_hotspot_ready, backend, ssid, band, if (channel == 0) getString(R.string.auto_value) else channel.toString())
+            } else getString(R.string.status_hotspot_ready, backend, ssid, band, if (channel == 0) getString(R.string.auto_value) else channel.toString()) +
+                (if (passphrase.isNotEmpty()) "\nTest with another phone: join “$ssid”, password $passphrase. Not joinable at all → the group is not on air; joinable → only the iPhone refuses it." else "")
         CarPlayStatus.WaitingForPairedIphone -> getString(R.string.waiting_for_paired_iphone)
         CarPlayStatus.ConnectingBluetooth -> getString(R.string.connecting_bluetooth)
         CarPlayStatus.RunningWireless -> getString(R.string.wireless_carplay_control_running)
@@ -5023,6 +5030,7 @@ class CarPlayHostActivity : ComponentActivity() {
         val band: String? = null,
         val channel: Int? = null,
         val backend: String? = null,
+        val passphrase: String? = null,
     )
 }
 

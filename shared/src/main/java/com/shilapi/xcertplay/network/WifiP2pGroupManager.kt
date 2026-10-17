@@ -670,7 +670,13 @@ class WifiP2pGroupManager(
         val startedMicros = android.os.SystemClock.elapsedRealtime() * 1000
         @Suppress("DEPRECATION")
         val scanStarted = runCatching { wifi.startScan() }.getOrDefault(false)
-        diagnostic("Wi-Fi P2P legacy channel scan started=$scanStarted ssid=$groupSsid")
+        // Android 8 hands apps an empty scan list while Location is off, whatever the permission.
+        val locationMode = runCatching {
+            android.provider.Settings.Secure.getInt(appContext.contentResolver, android.provider.Settings.Secure.LOCATION_MODE)
+        }.getOrNull()
+        @Suppress("DEPRECATION")
+        val initial = runCatching { wifi.scanResults }.getOrNull().orEmpty()
+        diagnostic("Wi-Fi P2P legacy channel scan started=$scanStarted locationMode=${locationMode ?: "unknown"} (0 = off) resultsBefore=${initial.size}")
         val scanDeadline = minOf(deadlineNanos, deadlineAfter(SCAN_OBSERVE_MILLIS))
         var stale = 0
         while (true) {
@@ -683,6 +689,8 @@ class WifiP2pGroupManager(
             }
             if (remainingNanos(scanDeadline) <= 0) {
                 if (stale > 0) diagnostic("Wi-Fi P2P legacy channel scan only found a stale result frequencyMHz=$stale")
+                else diagnostic("Wi-Fi P2P legacy channel scan ended results=${results.size} ownGroupSeen=false" +
+                    if (results.isEmpty()) " (an empty list usually means Location is off on the head unit)" else "")
                 return stale
             }
             synchronized(stateLock) { waitNanos(TimeUnit.MILLISECONDS.toNanos(500)) }

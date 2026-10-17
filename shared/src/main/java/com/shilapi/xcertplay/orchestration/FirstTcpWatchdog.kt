@@ -19,6 +19,10 @@ internal class FirstTcpWatchdog(
     private var success = false
     private var cancelTimer: (() -> Unit)? = null
 
+    /** StartSession went out and no AirPlay TCP connection has arrived yet (terminated or not). */
+    val awaitingFirstTcp: Boolean
+        @Synchronized get() = firstStartNanos != null && firstAcceptNanos == null && !success
+
     @Synchronized fun startSessionSent(sentAtNanos: Long) {
         if (terminated || firstStartNanos != null) return
         firstStartNanos = sentAtNanos

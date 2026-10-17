@@ -28,7 +28,17 @@ What differs from the main line (everything else is 24.38):
 - **Neighbour table in the log.** Every 10 s snapshot now carries `neighbours=N complete=M`
   for the group interface: a complete entry means the iPhone associated and exchanged ARP, so
   the log tells "never joined" apart from "joined but no CarPlay TCP".
-- Version `0.2.13-legacy24.38-friend2`, published as a pre-release.
+- **friend3 — finding out why nobody joins.** The second report (friend2) showed `neighbours=0
+  complete=0` on every attempt: the iPhone never associates at all, and the unit's own scan never
+  sees the group (Android 8 returns an empty scan list while Location is off). So friend3 adds:
+  the group's password on the connection screen, so a second phone or laptop can try to join
+  “DIRECT-…” by hand (not joinable → the group is not on air; joinable → only the iPhone refuses
+  it, which points at the channel hint); a Bluetooth drop after StartSession now counts as a
+  failed join for the ladder; the scan diagnostic reports the Location mode and result count;
+  and the diagnostic report pulls the head unit's `wpa_supplicant` / Wi-Fi P2P logcat and
+  `dumpsys wifip2p` over local ADB when "ADB over network" is on, which shows the group's real
+  frequency (`P2P-GROUP-STARTED … freq=`) and every association attempt.
+- Version `0.2.13-legacy24.38-friend3`, published as a pre-release.
 
 If Wi-Fi Direct never works on this unit, the remaining options need no build: **Built-in car
 hotspot** (turn the head unit's own hotspot on in Android settings and save its name and
