@@ -39,7 +39,17 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.41)
+## Fork features (0.2.13-legacy24.42)
+
+24.42: output path A/B and vendor-enhancement restore
+- Android Auto on the same unit is louder and clean on the top volume steps because it plays
+  through MediaTek's BesLoudness (the firmware's loudness maximiser and limiter), which DiPlay
+  switches off at session start. `AudioPath` now records the firmware's states before switching
+  them off and restores them at the next session once "Disable MediaTek sound enhancements" is
+  off (some firmwares keep the off state until reboot).
+- Settings → Audio path: "Match Android Auto's path" (plain 16-bit at the stream rate, firmware
+  enhancements restored) and "DiPlay as the sound card" (float, hardware rate, enhancements off)
+  flip the three toggles at once for a direct comparison.
 
 24.41: drive and output trim
 - `driveDb` (0 … 12): a loudness maximiser stage, gain after the equalizers and before the bass

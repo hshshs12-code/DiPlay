@@ -28,6 +28,14 @@ object AudioPath {
     /** MediaTek vendor parameters; harmless on HALs that do not know them. */
     private val VENDOR_OFF = listOf("SetBesLoudnessStatus=0", "SetBesSurroundStatus=0", "BesSurround_OnOff=0", "SetMusicPlusStatus=0", "AudioEnhance=0")
     private val VENDOR_READ = listOf("GetBesLoudnessStatus", "GetBesSurroundStatus", "GetMusicPlusStatus")
+    private val VENDOR_SETTERS = mapOf("GetBesLoudnessStatus" to "SetBesLoudnessStatus", "GetBesSurroundStatus" to "SetBesSurroundStatus", "GetMusicPlusStatus" to "SetMusicPlusStatus")
+
+    /** Current vendor enhancement states as key → "0"/"1", skipping anything the HAL does not answer. */
+    private fun vendorStates(manager: AudioManager): Map<String, String> = VENDOR_READ.mapNotNull { key ->
+        val raw = runCatching { manager.getParameters(key) }.getOrNull().orEmpty()
+        val value = raw.substringAfterLast('=', "").trim()
+        if (value == "0" || value == "1") key to value else null
+    }.toMap()
 
     private var receiver: BroadcastReceiver? = null
     private var sessions = 0
@@ -77,10 +85,31 @@ object AudioPath {
         val app = context.applicationContext
         val manager = app.getSystemService(AudioManager::class.java) ?: return
         if (AirPlayPersistence.loadDisableVendorEnhancements(app)) {
+            // Remember what the firmware had before switching it off, so "match other apps" can put it back.
+            val before = vendorStates(manager)
+            if (before.isNotEmpty() && !prefs(app).contains("vendor_before")) {
+                prefs(app).edit().putString("vendor_before", before.entries.joinToString(",") { "${it.key}=${it.value}" }).apply()
+            }
             val results = VENDOR_OFF.map { parameter -> runCatching { manager.setParameters(parameter) }.fold({ "$parameter ok" }, { "$parameter failed" }) }
             val readback = VENDOR_READ.map { key -> "$key=${runCatching { manager.getParameters(key) }.getOrDefault("?").ifEmpty { "(no answer)" }}" }
             lastVendorResult = readback.joinToString(" ")
             log("audio path: vendor enhancements off → ${results.joinToString(", ")}; readback ${lastVendorResult}")
+        } else {
+            // An earlier session switched them off and some firmwares keep that until reboot: restore
+            // the recorded states (BesLoudness is what makes other apps loud and clip-free here).
+            val before = prefs(app).getString("vendor_before", null)
+            if (!before.isNullOrEmpty()) {
+                val results = before.split(',').mapNotNull { entry ->
+                    val key = entry.substringBefore('='); val value = entry.substringAfter('=', "")
+                    val setter = VENDOR_SETTERS[key] ?: return@mapNotNull null
+                    if (value != "0" && value != "1") return@mapNotNull null
+                    runCatching { manager.setParameters("$setter=$value") }.fold({ "$setter=$value ok" }, { "$setter=$value failed" })
+                }
+                prefs(app).edit().remove("vendor_before").apply()
+                val readback = VENDOR_READ.map { key -> "$key=${runCatching { manager.getParameters(key) }.getOrDefault("?").ifEmpty { "(no answer)" }}" }
+                lastVendorResult = readback.joinToString(" ")
+                log("audio path: vendor enhancements restored → ${results.joinToString(", ")}; readback ${lastVendorResult}")
+            }
         }
         pinVolume(app, manager, log)
         CleanVolume.begin(app, manager, log)

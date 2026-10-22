@@ -835,7 +835,22 @@ class DiPlayActivity : ComponentActivity() {
             sub("Output at the hardware sample rate", "Opens the music track at the hardware's own rate (${AudioPath.nativeSampleRate(this).takeIf { it > 0 } ?: "unknown"} Hz here) and resamples in DiPlay with a windowed-sinc converter, so Android's mixer does not resample.", "native_rate_output") { AirPlayPersistence.saveNativeRateOutput(this, it) }
             sub("Float output to Android's mixer", "Hands Android 32-bit float samples; the first rounding to integer happens in the audio driver, not in DiPlay.", "float_output") { AirPlayPersistence.saveFloatOutput(this, it) }
             sub("Keep Android media volume at maximum", "Only after you set \"Knob is hardware\" below (DiPlay no longer guesses it from silence): Android's software volume then sits at 100 % so the mixer multiplies by 1. Does nothing while the knob type is unknown or software.", "pin_media_volume", reconnect = false) { AirPlayPersistence.savePinMediaVolume(this, it) }
-            sub("Disable MediaTek sound enhancements", "Switches off BesLoudness / BesSurround / MusicPlus through the vendor audio interface at session start, when the firmware has them.", "disable_vendor_fx", reconnect = false) { AirPlayPersistence.saveDisableVendorEnhancements(this, it) }
+            sub("Disable MediaTek sound enhancements", "Switches off BesLoudness / BesSurround / MusicPlus through the vendor audio interface at session start, when the firmware has them. BesLoudness is the firmware's own loudness maximiser and limiter: it is what makes other apps (Android Auto) sound louder and stay clean on the top volume steps. Off = DiPlay restores what the firmware had.", "disable_vendor_fx", reconnect = false) { AirPlayPersistence.saveDisableVendorEnhancements(this, it) }
+            card.addView(label("One tap to compare the two paths; reconnect afterwards.", 13, MUTED).apply { setPadding(0, dp(8), 0, dp(4)) })
+            val pathRow = row()
+            pathRow.addView(button("Match Android Auto's path", false) {
+                AirPlayPersistence.saveDisableVendorEnhancements(this, false)
+                AirPlayPersistence.saveFloatOutput(this, false)
+                AirPlayPersistence.saveNativeRateOutput(this, false)
+                toast("Plain 16-bit output at the stream rate, firmware enhancements restored at the next session"); render()
+            }, LinearLayout.LayoutParams(0, dp(56), 1f).apply { rightMargin = dp(6) })
+            pathRow.addView(button("DiPlay as the sound card", false) {
+                AirPlayPersistence.saveDisableVendorEnhancements(this, true)
+                AirPlayPersistence.saveFloatOutput(this, true)
+                AirPlayPersistence.saveNativeRateOutput(this, true)
+                toast("Float output at the hardware rate, firmware enhancements off at the next session"); render()
+            }, LinearLayout.LayoutParams(0, dp(56), 1f))
+            card.addView(pathRow)
             val cleanMax = runCatching { getSystemService(AudioManager::class.java)?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull()?.takeIf { it > 0 } ?: 30
             toggle(card, "Clean volume mode", "For units that distort on every volume step but one. During a CarPlay or iPod session the head unit is parked at its clean step and the knob drives DiPlay's own digital volume instead (float, no distortion at any level); the level shows on screen. When the session ends the unit gets its real volume back. Needs the knob to be Android's software volume.", CleanVolume.enabled(this)) {
                 CleanVolume.saveEnabled(this, it)
