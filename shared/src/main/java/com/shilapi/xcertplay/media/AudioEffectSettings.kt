@@ -32,6 +32,10 @@ data class AudioEffectSettings(
     val bassEnhanceHz: Int = 100,
     /** Soft clip of the band below 120 Hz at −N dBFS so bass never drives the limiter; 0 = off. Neutral here; the stored default and every bass preset use 3. */
     val bassClipDb: Int = 0,
+    /** Loudness drive in dB (0..12): gain before the bass clip and limiter, so the average level rises while peaks stay under the ceiling. */
+    val driveDb: Int = 0,
+    /** Output trim in dB (0..12, applied as −trim): the whole chain's level after limiting, to stay under an amplifier that clips on high volume steps. */
+    val outputTrimDb: Int = 0,
     /** Auto level (slow leveler) on/off and its strength 0..100 (100 = full normalisation). */
     val autoLevel: Boolean = false,
     val autoLevelAmount: Int = 50,
@@ -62,7 +66,7 @@ data class AudioEffectSettings(
 ) {
     /** True when any stage beyond the graphic equalizer is active. */
     fun hasAdvancedProcessing(): Boolean =
-        subsonicHz > 0 || bassEnhance > 0 || bassClipDb > 0 || autoLevel || airDb > 0 || (loudnessComp && loudnessCompAmount > 0) ||
+        subsonicHz > 0 || bassEnhance > 0 || bassClipDb > 0 || driveDb > 0 || outputTrimDb > 0 || autoLevel || airDb > 0 || (loudnessComp && loudnessCompAmount > 0) ||
             parametric.any { it.type != ParametricBand.OFF && it.gainTenths != 0 } || hasStereoStage()
 
     /** True when the stereo stage (width, balance, driver-seat delay, crossfeed) changes the signal. */
@@ -111,6 +115,8 @@ data class AudioEffectSettings(
         private const val KEY_BASS_ENHANCE = "bass_enhance"
         private const val KEY_BASS_ENHANCE_HZ = "bass_enhance_hz"
         private const val KEY_BASS_CLIP = "bass_clip_db"
+        private const val KEY_DRIVE = "drive_db"
+        private const val KEY_OUTPUT_TRIM = "output_trim_db"
         private const val KEY_AUTO_LEVEL = "auto_level"
         private const val KEY_AUTO_LEVEL_AMOUNT = "auto_level_amount"
         private const val KEY_PARAMETRIC = "parametric"
@@ -130,6 +136,8 @@ data class AudioEffectSettings(
         const val MAX_BASS = 1000
         const val MAX_LOUDNESS_MB = 2000
         const val MAX_STEREO_WIDTH = 200
+        const val MAX_DRIVE_DB = 12
+        const val MAX_TRIM_DB = 12
         const val MAX_BALANCE = 100
         const val MAX_DRIVER_DELAY_TENTHS = StereoStage.MAX_DELAY_TENTHS
         const val MAX_CROSSFEED = 100
@@ -156,6 +164,8 @@ data class AudioEffectSettings(
                 bassEnhance = prefs.getInt(KEY_BASS_ENHANCE, 0).coerceIn(0, 100),
                 bassEnhanceHz = prefs.getInt(KEY_BASS_ENHANCE_HZ, 100).coerceIn(50, 200),
                 bassClipDb = prefs.getInt(KEY_BASS_CLIP, 3).coerceIn(0, BassClipper.MAX_CLIP_DB),
+                driveDb = prefs.getInt(KEY_DRIVE, 0).coerceIn(0, MAX_DRIVE_DB),
+                outputTrimDb = prefs.getInt(KEY_OUTPUT_TRIM, 0).coerceIn(0, MAX_TRIM_DB),
                 autoLevel = prefs.getBoolean(KEY_AUTO_LEVEL, false),
                 autoLevelAmount = prefs.getInt(KEY_AUTO_LEVEL_AMOUNT, 50).coerceIn(0, 100),
                 parametric = ParametricBand.decodeList(prefs.getString(KEY_PARAMETRIC, "")),
@@ -188,6 +198,8 @@ data class AudioEffectSettings(
                 .putInt(KEY_BASS_ENHANCE, settings.bassEnhance)
                 .putInt(KEY_BASS_ENHANCE_HZ, settings.bassEnhanceHz)
                 .putInt(KEY_BASS_CLIP, settings.bassClipDb.coerceIn(0, BassClipper.MAX_CLIP_DB))
+                .putInt(KEY_DRIVE, settings.driveDb.coerceIn(0, MAX_DRIVE_DB))
+                .putInt(KEY_OUTPUT_TRIM, settings.outputTrimDb.coerceIn(0, MAX_TRIM_DB))
                 .putBoolean(KEY_AUTO_LEVEL, settings.autoLevel)
                 .putInt(KEY_AUTO_LEVEL_AMOUNT, settings.autoLevelAmount)
                 .putString(KEY_PARAMETRIC, settings.parametric.joinToString(",") { it.encode() })

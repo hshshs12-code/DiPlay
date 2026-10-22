@@ -39,7 +39,15 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.40)
+## Fork features (0.2.13-legacy24.41)
+
+24.41: drive and output trim
+- `driveDb` (0 … 12): a loudness maximiser stage, gain after the equalizers and before the bass
+  clip and limiter, ramped on the 64-frame grid; it forces the limiter on, even over the hard-off.
+  Overview card "Drive" and a stepper under Advanced › Loudness and dynamics. Max Loud: +6 dB.
+- `outputTrimDb` (0 … 12): level after the limiter, before the dither, so a unit whose amplifier
+  clips on the top volume steps can keep using them; a car setting that presets leave alone.
+- `DriveTest`: +6 dB on a quiet tone, ceiling held at +12 dB with the limiter hard-off, trim −6 dB.
 
 24.40: clean volume mode
 - `CleanVolume` + `VolumeOverlay`: the head unit distorted on every volume step except 20 (its

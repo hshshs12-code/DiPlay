@@ -125,6 +125,9 @@ class EqualizerPanel(
         addControl(overviewControl("Bass character", "Adds upper-bass harmonics the door speakers can play", settings.bassEnhance) { amount ->
             save(settings.copy(bassEnhance = amount, presetName = ""))
         }, true)
+        addControl(overviewControl("Drive", "Louder without clipping: gain in front of the bass clip and limiter", settings.driveDb, step = 1, max = AudioEffectSettings.MAX_DRIVE_DB, unit = " dB") { db ->
+            save(settings.copy(driveDb = db, presetName = ""))
+        }, true)
         addControl(overviewControl("Auto level", "Keeps songs and podcasts at a steady level", if (settings.autoLevel) settings.autoLevelAmount else 0) { amount ->
             save(settings.copy(autoLevel = amount > 0, autoLevelAmount = if (amount > 0) amount else settings.autoLevelAmount, presetName = ""))
         }, false)
@@ -159,6 +162,7 @@ class EqualizerPanel(
             }
             val forcedBy = limiterForcedBy()
             val limiterText = when {
+                settings.limiterOff && settings.driveDb > 0 -> "Limiter on (drive needs it)"
                 settings.limiterOff -> "Limiter OFF (your choice; peaks clip at full scale)"
                 settings.limiter && forcedBy.isEmpty() -> "Limiter on"
                 forcedBy.isNotEmpty() -> "Limiter on (${forcedBy.joinToString(", ")})"
@@ -172,15 +176,15 @@ class EqualizerPanel(
     }
 
     /** Which stages are forcing the limiter on right now (mirrors EqualizerDsp.configure). */
-    private fun limiterForcedBy(): List<String> = if (settings.limiterOff) emptyList() else listOfNotNull(
+    private fun limiterForcedBy(): List<String> = (if (settings.driveDb > 0) listOf("drive") else emptyList()) + if (settings.limiterOff) emptyList() else listOfNotNull(
         "bass enhancer".takeIf { settings.bassEnhance > 0 },
         "auto level".takeIf { settings.autoLevel },
         "loudness".takeIf { settings.loudnessComp },
     )
 
     /** A card with a title, a large value between 64 dp − / + buttons, and a one-line hint. */
-    private fun overviewControl(title: String, hint: String, initial: Int, onChange: (Int) -> Unit): View {
-        var value = initial.coerceIn(0, 100)
+    private fun overviewControl(title: String, hint: String, initial: Int, step: Int = 5, max: Int = 100, unit: String = " %", onChange: (Int) -> Unit): View {
+        var value = initial.coerceIn(0, max)
         val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12))
             background = rounded(Color.argb(28, 255, 255, 255), Color.argb(60, 255, 255, 255))
@@ -191,13 +195,13 @@ class EqualizerPanel(
         lateinit var minus: View
         lateinit var plus: View
         fun repaint() {
-            valueView.text = if (value == 0) "Off" else "$value %"
-            minus.isEnabled = value > 0; plus.isEnabled = value < 100
+            valueView.text = if (value == 0) "Off" else "${if (unit.trim() == "dB") "+" else ""}$value$unit"
+            minus.isEnabled = value > 0; plus.isEnabled = value < max
             minus.alpha = if (minus.isEnabled) 1f else 0.35f
             plus.alpha = if (plus.isEnabled) 1f else 0.35f
         }
-        minus = stepButton("−", "Decrease $title") { value = (value - 5).coerceAtLeast(0); repaint(); onChange(value) }
-        plus = stepButton("+", "Increase $title") { value = (value + 5).coerceAtMost(100); repaint(); onChange(value) }
+        minus = stepButton("−", "Decrease $title") { value = (value - step).coerceAtLeast(0); repaint(); onChange(value) }
+        plus = stepButton("+", "Increase $title") { value = (value + step).coerceAtMost(max); repaint(); onChange(value) }
         row.addView(minus, LinearLayout.LayoutParams(dp(64), dp(64)))
         row.addView(valueView, LinearLayout.LayoutParams(0, dp(72), 1f))
         row.addView(plus, LinearLayout.LayoutParams(dp(64), dp(64)))
@@ -334,6 +338,8 @@ class EqualizerPanel(
         section("Loudness and dynamics", "dyn") { card ->
             card.addView(switchFactory("Auto level", settings.autoLevel, "Evens out quiet podcasts and loud tracks (weighted programme level toward a fixed target). Turns the limiter on while active.") { save(settings.copy(autoLevel = it, presetName = "")) })
             card.addView(stepper("Auto level strength", (0..100 step 10).toList(), settings.autoLevelAmount / 10 * 10, { if (it == 0) "Off" else "$it %" }) { save(settings.copy(autoLevelAmount = it, presetName = "")) })
+            card.addView(stepper("Drive (louder)", (0..AudioEffectSettings.MAX_DRIVE_DB).toList(), settings.driveDb.coerceIn(0, AudioEffectSettings.MAX_DRIVE_DB), { if (it == 0) "Off" else "+$it dB into the bass clip and limiter · keeps the limiter on" }) { save(settings.copy(driveDb = it, presetName = "")) })
+            card.addView(stepper("Output trim", (0..AudioEffectSettings.MAX_TRIM_DB).toList(), settings.outputTrimDb.coerceIn(0, AudioEffectSettings.MAX_TRIM_DB), { if (it == 0) "0 dB (full scale)" else "−$it dB after the limiter · for amplifiers that clip on high volume steps" }) { save(settings.copy(outputTrimDb = it)) })
             val forced = limiterForcedBy()
             card.addView(switchFactory("Limiter", !settings.limiterOff && (settings.limiter || forced.isNotEmpty()),
                 "True-peak limiter, ceiling ${"%.2f".format(EqualizerDsp.LIMITER_CEILING_DB)} dBFS, 2 ms look-ahead. Digital peak protection only; it cannot protect the speakers. Off means completely off, whatever auto level, loudness or the bass enhancer would prefer." +

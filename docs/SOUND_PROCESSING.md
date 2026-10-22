@@ -14,10 +14,12 @@ anything beyond the head unit's own effect.
 | Loudness compensation | `LoudnessCompensator` | Volume-linked bass/treble voicing inspired by the ISO 226 equal-loudness contours: a low shelf (100 Hz) and a high shelf (8 kHz) whose plateau gains come from the contour differences (the 100 Hz point itself sits at half the plateau, as any shelf does). Driven by the estimated Android media-volume level, when the knob is the software volume; not a calibrated SPL model. 200 ms ramps. |
 | Air shelf | `AirShelf` | High shelf (6/8/10/12 kHz, 0–8 dB) crossfaded by a sibilance detector (5–9 kHz vs broadband, per channel and linked by the louder one, so out-of-phase hats are seen too). It backs the lift off during "s" sounds; it does not remove sibilance already in the mix. |
 | Bass enhancer | `BassEnhancer` | Linkwitz-Riley 4th-order split with matching all-pass; peak envelope (25 ms hold, 60 ms release); Chebyshev T2/T3/T4 harmonics at unit amplitude so their level tracks the sub band (2:1 above −12 dBFS); harmonics band-limited 1.5×–6× the crossover (≤700 Hz); sub trim up to −6 dB at full amount. The enhancer always runs under the limiter: its all-pass dry path can exceed full scale on square-ish bass, which its own harmonic guard cannot bound. |
+| Drive | `EqualizerDsp` | Loudness maximiser: 0 … +12 dB of gain after the equalizers and before the bass clip and limiter, so the average level rises while every peak still lands under the ceiling. Keeps the limiter on, even over the hard-off. Max Loud uses +6 dB. |
 | Bass clip | `BassClipper` | Soft clipper on the band below 120 Hz (Linkwitz-Riley split with matching all-pass, linear to 60 % of the ceiling, tanh knee above). Default −3 dB. Bass bounds itself, so an 808 never drives the full-band limiter and the vocals stop ducking under the bass. |
 | Stereo stage | `StereoStage` | Mid/side width (side high-passed at 200 Hz when widening, so the bass image stays as recorded), constant-power balance (equal gain-squares, not equal power for unequal channels), fractional driver-seat delay (4-point Lagrange: exact at low frequencies, the delayed side droops ~1 dB at 12 kHz for fractional delays), Bauer crossfeed. 20 ms gain ramps, glided delay. |
 | Auto level | `Leveler` | Gated program leveler with a K-like weighting (60 Hz HPF + 1.5 kHz +4 dB shelf) and a −14 dB weighted-programme target. It is a car AGC, not a BS.1770 meter: short gate blocks, −50 / −20 relative gates, momentary + long-term estimates for program-dependent release, 0.3 s hold, slew-limited, ±12 dB. |
 | Limiter | `TruePeakLimiter` | 4× oversampled true-peak detection with a 64-tap Kaiser polyphase kernel (reads broadband bursts within 0.15 dB of a 16×/96-tap reference; the old 12-tap kernel let sign bursts through at +1.7 dBTP), 2 ms look-ahead, sliding-minimum with 20 ms hold, dual release (50 ms / 500 ms), Hann-like attack, stereo-linked, ceiling 0.975 (−0.22 dBFS), hard clip at 0.999. Verified on 200 random sign bursts: output reference true peak ≤ 0.99, also after the 44.1→48 kHz output conversion. Switching it on or off crossfades over 10 ms (no gap, no jump). Digital peak protection only: it cannot know the amplifier's rails or the speakers' excursion. |
+| Output trim | `EqualizerDsp` | 0 … −12 dB after the limiter and before the dither, for amplifiers that clip on the top volume steps; a car setting, kept across presets. |
 | Dither | `EqualizerDsp` | TPDF ±1 LSB at the single 16-bit quantisation; float output skips it. |
 
 All stages are skipped when neutral. A settings change designs every coefficient on the caller's
@@ -76,7 +78,7 @@ groups in Advanced collapse.
   enhancer or loudness compensation is on; switching it off means off completely, whatever those
   stages prefer, and peaks then clip at full scale), loudness compensation + amount + reference
   volume step, device loudness.
-- **Sound page switches**: Limiter and Bass clip sit right under the two everyday controls.
+- **Sound page**: Bass character, Drive and Auto level cards; Limiter and Bass clip switches under them.
 - **Tone**: air dB, air corner, de-ess.
 - **Stereo**: width, balance, driver-seat delay, driver side, crossfeed.
 - **Parametric EQ**: tap a band to pick Off / Peak / Low shelf / High shelf from a list; frequency,

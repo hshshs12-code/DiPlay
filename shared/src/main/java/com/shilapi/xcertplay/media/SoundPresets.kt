@@ -18,6 +18,8 @@ object SoundPresets {
         val bassEnhanceHz: Int = 100,
         /** Low-band soft clip at −N dB (0 = off): bass bounds itself instead of ducking the mix. */
         val bassClipDb: Int = 3,
+        /** Loudness drive before the bass clip and limiter, dB. */
+        val driveDb: Int = 0,
         val autoLevel: Boolean = false,
         val autoLevelAmount: Int = 50,
         val limiter: Boolean = true,
@@ -43,6 +45,8 @@ object SoundPresets {
             bassEnhance = bassEnhance,
             bassEnhanceHz = bassEnhanceHz,
             bassClipDb = bassClipDb,
+            driveDb = driveDb,
+            outputTrimDb = settings.outputTrimDb,
             autoLevel = autoLevel,
             autoLevelAmount = autoLevelAmount,
             limiter = limiter,
@@ -144,7 +148,7 @@ object SoundPresets {
         Preset(
             "Yaris · Max Loud", "As loud as the limiter allows: full auto level, limiter hard at work. Digital protection only; mind the doors.",
             intArrayOf(-3, 3, 2, 1, -1, 0, 1, 2, 2, 2, 2, 1),
-            parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 50, bassEnhanceHz = 100, autoLevel = true, autoLevelAmount = 100,
+            parametric = YARIS_CORRECTION, subsonicHz = 40, bassEnhance = 50, bassEnhanceHz = 100, autoLevel = true, autoLevelAmount = 100, driveDb = 6,
         ),
         // Retunes proposed by the October 2026 external DSP audit, kept next to the originals for
         // A/B listening in the car: less stacked treble (no shared +2 dB shelf), a lighter 62 Hz

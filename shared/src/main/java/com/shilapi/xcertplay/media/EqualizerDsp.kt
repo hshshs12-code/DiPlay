@@ -88,7 +88,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         val graphicDesign: DoubleArray, val graphicActive: BooleanArray,
         val parametricDesign: DoubleArray, val parametricActive: BooleanArray,
         val subsonicDesign: DoubleArray, val subsonicActive: Boolean,
-        val bassAmount: Int, val bassHz: Int, val bassClipDb: Int,
+        val bassAmount: Int, val bassHz: Int, val bassClipDb: Int, val driveDb: Int, val trimDb: Int,
         val autoLevel: Boolean, val autoStrength: Double,
         val width: Int, val balance: Int, val delayTenths: Int, val driverSide: Int, val crossfeed: Int,
         val airDb: Int, val airHz: Int, val deEss: Int,
@@ -132,6 +132,11 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     // Coefficient smoothing (on a persistent 64-frame grid) and dither
     private val rampSteps = max(1, Math.round(RAMP_SECONDS * sampleRate / SMOOTH_CHUNK_FRAMES).toInt())
     private var smoothSteps = 0
+    // Loudness drive (before the bass clip and limiter) and output trim (after), ramped on the 64-frame grid.
+    private var driveTarget = 1.0
+    private var drive = 1.0
+    private var trimTarget = 1.0
+    private var trim = 1.0
     private var stepPhase = 0
     private var denormalCounter = 0
     private var ditherState = 0x9E3779B9.toInt()
@@ -148,7 +153,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         val (pDesign, pActive) = designParametric(emptyList())
         val (sDesign, sActive) = designSubsonic(0)
         pending.set(Prepared(gDesign, gActive, pDesign, pActive, sDesign, sActive,
-            0, 100, 0, false, 0.0, 100, 0, 0, 0, 0, 0, AirShelf.DEFAULT_HZ, 0, false, 0, limiter))
+            0, 100, 0, 0, 0, false, 0.0, 100, 0, 0, 0, 0, 0, AirShelf.DEFAULT_HZ, 0, false, 0, limiter))
     }
 
     /** Full configuration from the user's settings; [softClip] forces the limiter on (media soft clipper). */
@@ -160,8 +165,9 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         // harmonics on top of a dry path that an all-pass can push past full scale: both need the
         // limiter in front of the DAC, as does auto level.
         // The user's hard-off wins over every stage that would want the limiter: peaks then clip at full scale.
-        val useLimiter = if (active && settings.limiterOff) false
-            else softClip || (active && (settings.limiter || settings.autoLevel || loud || settings.bassEnhance > 0))
+        // Drive only makes sense with a limiter behind it, so it wins even over the hard-off.
+        val useLimiter = if (active && settings.limiterOff && settings.driveDb == 0) false
+            else softClip || (active && (settings.limiter || settings.autoLevel || loud || settings.bassEnhance > 0 || settings.driveDb > 0))
         this.limiter = useLimiter
         val auto = active && settings.autoLevel && settings.autoLevelAmount > 0
         if (auto && !autoPolicy) leveler.reset()   // queued: the audio thread performs it
@@ -172,6 +178,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         pending.set(Prepared(
             gDesign, gActive, pDesign, pActive, sDesign, sActive,
             if (active) settings.bassEnhance else 0, settings.bassEnhanceHz, if (active) settings.bassClipDb else 0,
+            if (active) settings.driveDb else 0, if (active) settings.outputTrimDb else 0,
             active && settings.autoLevel, settings.autoLevelAmount.coerceIn(0, 100) / 100.0,
             if (active) settings.stereoWidth else 100, if (active) settings.balance else 0,
             if (active) settings.driverSeatDelayTenthsMs else 0, settings.driverSide, if (active) settings.crossfeed else 0,
@@ -190,6 +197,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         subsonicOn = subsonic.any
         bass.configure(p.bassAmount, p.bassHz)
         clipper.configure(p.bassClipDb)
+        driveTarget = 10.0.pow(p.driveDb.coerceIn(0, 24) / 20.0)
+        trimTarget = 10.0.pow(-p.trimDb.coerceIn(0, 24) / 20.0)
         leveler.strength = p.autoStrength
         autoOn = p.autoLevel && p.autoStrength > 0.0
         stage?.configure(p.width, p.balance, p.delayTenths, p.driverSide, p.crossfeed)
@@ -203,6 +212,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         bass.headroomGuard = !p.limiter
         if (first) {
             graphic.snap(); parametric.snap(); subsonic.snap(); bass.snap(); clipper.snap()
+            drive = driveTarget; trim = trimTarget
             configured = true
         } else {
             smoothSteps = rampSteps
@@ -300,7 +310,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         val st = stereo != null && stereo.isActive()
         val airOn = air.isActive
         val loudStage = loudness.enabled || loudness.busy
-        if (!g && !p && !sub && !b && !clip && !auto && !st && !airOn && !loudStage && !useLimiter) return false
+        val gainStages = drive != 1.0 || driveTarget != 1.0 || trim != 1.0 || trimTarget != 1.0
+        if (!g && !p && !sub && !b && !clip && !auto && !st && !airOn && !loudStage && !useLimiter && !gainStages) return false
         val frames = length / (2 * channels)
         if (frames <= 0) return false
         ensureScratch(frames)
@@ -316,6 +327,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
                 if (smoothSteps > 0) {
                     val alpha = 1.0 / smoothSteps
                     graphic.step(alpha); parametric.step(alpha); subsonic.step(alpha); bass.step(alpha)
+                    drive += (driveTarget - drive) * alpha; trim += (trimTarget - trim) * alpha
                     if (--smoothSteps == 0) {
                         graphic.settle(); parametric.settle(); subsonic.settle()
                         subsonicOn = subsonic.any
@@ -347,7 +359,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
                         for (band in 0 until MAX_PARAMETRIC) if (pActive[band]) x = biquad(x, pc, band * 5, parametric.state, base + band * 4)
                     }
                     if (l) x = loudness.processSample(x, ch)
-                    frame[ch] = x
+                    frame[ch] = x * drive
                 }
                 // Stereo-linked stages: one mono control path for all channels.
                 if (airOn) air.processFrame(frame)
@@ -375,7 +387,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
 
     /** 16-bit output with TPDF dither (two uniform draws, ±1 LSB triangular), or float when rendering to float. */
     private fun put(data: ByteArray, o: Int, v0: Double) {
-        val x = v0 * outputGain
+        val x = v0 * outputGain * trim
         val f = floatOut
         if (f != null) { f[floatIndex++] = x.toFloat(); return }
         var r = ditherState
