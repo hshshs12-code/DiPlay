@@ -16,6 +16,8 @@ object SoundPresets {
         val subsonicHz: Int = 0,
         val bassEnhance: Int = 0,
         val bassEnhanceHz: Int = 100,
+        /** Low-band soft clip at −N dB (0 = off): bass bounds itself instead of ducking the mix. */
+        val bassClipDb: Int = 3,
         val autoLevel: Boolean = false,
         val autoLevelAmount: Int = 50,
         val limiter: Boolean = true,
@@ -40,9 +42,11 @@ object SoundPresets {
             subsonicHz = subsonicHz,
             bassEnhance = bassEnhance,
             bassEnhanceHz = bassEnhanceHz,
+            bassClipDb = bassClipDb,
             autoLevel = autoLevel,
             autoLevelAmount = autoLevelAmount,
             limiter = limiter,
+            limiterOff = false,
             stereoWidth = stereoWidth,
             balance = balance,
             driverSeatDelayTenthsMs = driverSeatDelayTenthsMs,
@@ -112,7 +116,7 @@ object SoundPresets {
         Preset(
             "Yaris · Flat Corrected", "Only the cabin correction (door boom and tweeter edge tamed, +2 dB top shelf): no genre voicing, no limiter.",
             intArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-            parametric = YARIS_CORRECTION, subsonicHz = 28, limiter = false,
+            parametric = YARIS_CORRECTION, subsonicHz = 28, limiter = false, bassClipDb = 0,
         ),
         Preset(
             "Yaris · Highway", "Road noise masks 60–250 Hz and dulls detail: lifts both, auto level keeps quiet parts audible.",
@@ -135,7 +139,7 @@ object SoundPresets {
             "Yaris · Podcast / Voice", "Speech clarity: no bass, presence lifted, strong auto level across different shows.",
             intArrayOf(-6, -4, -2, 0, 1, 1, 3, 3, 2, 0, -2, -3),
             parametric = listOf(ParametricBand.peak(170, -3f, 1.2f), ParametricBand.peak(2500, 2f, 1.0f)),
-            subsonicHz = 90, autoLevel = true, autoLevelAmount = 90,
+            subsonicHz = 90, autoLevel = true, autoLevelAmount = 90, bassClipDb = 0,
         ),
         Preset(
             "Yaris · Max Loud", "As loud as the limiter allows: full auto level, limiter hard at work. Digital protection only; mind the doors.",
@@ -161,7 +165,7 @@ object SoundPresets {
             "Yaris · Podcast (Audit)", "Audit retune of Podcast: 70 Hz high-pass keeps low voices, presence from the graphic bands only, auto level 75.",
             intArrayOf(-6, -3, -1, 0, 0, 0, 1, 1, 0, 0, -1, -2),
             parametric = listOf(ParametricBand.peak(170, -1.5f, 1.2f)),
-            subsonicHz = 70, autoLevel = true, autoLevelAmount = 75,
+            subsonicHz = 70, autoLevel = true, autoLevelAmount = 75, bassClipDb = 0,
         ),
     )
 }

@@ -130,6 +130,15 @@ class EqualizerPanel(
         }, false)
         body.addView(controls, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
 
+        // The two switches that decide whether bass can pull the rest of the mix down.
+        body.addView(switchFactory("Limiter", !settings.limiterOff && (settings.limiter || limiterForcedBy().isNotEmpty()),
+            "On: true-peak limiter in front of the DAC. Off: no limiter at all, even with auto level, loudness or the bass enhancer; peaks then clip at full scale.") { on ->
+            save(settings.copy(limiter = on, limiterOff = !on, presetName = ""))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+        body.addView(switchFactory("Bass clip", settings.bassClipDb > 0,
+            "Holds the band below 120 Hz under −${settings.bassClipDb.coerceAtLeast(1)} dB by soft clipping, so an 808 never makes the limiter duck the vocals. Level under Advanced › Bass.") { on ->
+            save(settings.copy(bassClipDb = if (on) settings.bassClipDb.takeIf { it > 0 } ?: 3 else 0, presetName = ""))
+        })
         val state = TextView(context).apply {
             textSize = 16f; setTextColor(mutedColor); gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(56)
             setPadding(dp(16), dp(8), dp(16), dp(8)); background = rounded(Color.argb(20, 255, 255, 255), Color.argb(50, 255, 255, 255))
@@ -150,18 +159,20 @@ class EqualizerPanel(
             }
             val forcedBy = limiterForcedBy()
             val limiterText = when {
+                settings.limiterOff -> "Limiter OFF (your choice; peaks clip at full scale)"
                 settings.limiter && forcedBy.isEmpty() -> "Limiter on"
                 forcedBy.isNotEmpty() -> "Limiter on (${forcedBy.joinToString(", ")})"
                 else -> "Limiter off"
             }
+            val clipText = if (settings.bassClipDb > 0) "Bass clip −${settings.bassClipDb} dB" else "Bass clip off"
             val side = if (settings.driverSide == AudioEffectSettings.DRIVER_RIGHT) "right" else "left"
-            state.text = "✓ $limiterText   ·   Driver on the $side" + (if (settings.presetName.isEmpty()) "   ·   Custom" else "")
+            state.text = "✓ $limiterText   ·   $clipText   ·   Driver on the $side" + (if (settings.presetName.isEmpty()) "   ·   Custom" else "")
         }
         refreshOverview?.invoke()
     }
 
     /** Which stages are forcing the limiter on right now (mirrors EqualizerDsp.configure). */
-    private fun limiterForcedBy(): List<String> = listOfNotNull(
+    private fun limiterForcedBy(): List<String> = if (settings.limiterOff) emptyList() else listOfNotNull(
         "bass enhancer".takeIf { settings.bassEnhance > 0 },
         "auto level".takeIf { settings.autoLevel },
         "loudness".takeIf { settings.loudnessComp },
@@ -309,6 +320,9 @@ class EqualizerPanel(
         section("Bass", "bass", hint = "Harmonics stand in for the sub-bass the door speakers cannot play; the subsonic filter removes what only flaps the cones. The enhancer keeps the limiter on.") { card ->
             card.addView(stepper("Bass enhancer", (0..100 step 10).toList(), settings.bassEnhance / 10 * 10, { if (it == 0) "Off" else "$it %" + (if (it >= 60) " · trims the real sub by ${"%.0f".format(6.0 * (it / 100.0) * (it / 100.0))} dB" else "") }) { save(settings.copy(bassEnhance = it, presetName = "")) })
             val crossovers = listOf(60, 70, 80, 90, 100, 110, 120, 140, 160, 200)
+            val clips = listOf(0, 1, 2, 3, 4, 6, 9)
+            card.addView(stepper("Bass clip (stops bass ducking the vocals)", clips, clips.minByOrNull { kotlin.math.abs(it - settings.bassClipDb) } ?: 3,
+                { if (it == 0) "Off · the limiter pulls the whole mix down on every 808" else "below 120 Hz held under −$it dB · limiter only sees mids and highs" }) { save(settings.copy(bassClipDb = it, presetName = "")) })
             card.addView(stepper("Enhancer crossover", crossovers, crossovers.minByOrNull { kotlin.math.abs(it - settings.bassEnhanceHz) } ?: 100, { "below $it Hz" }) { save(settings.copy(bassEnhanceHz = it, presetName = "")) })
             val subsonic = listOf(0, 20, 25, 30, 35, 40, 50, 60, 80, 100, 120)
             card.addView(stepper("Subsonic filter", subsonic, subsonic.minByOrNull { kotlin.math.abs(it - settings.subsonicHz) } ?: 0, { if (it == 0) "Off" else "−6 dB at $it Hz, 24 dB/octave below" }) { save(settings.copy(subsonicHz = it, presetName = "")) })
@@ -321,9 +335,9 @@ class EqualizerPanel(
             card.addView(switchFactory("Auto level", settings.autoLevel, "Evens out quiet podcasts and loud tracks (weighted programme level toward a fixed target). Turns the limiter on while active.") { save(settings.copy(autoLevel = it, presetName = "")) })
             card.addView(stepper("Auto level strength", (0..100 step 10).toList(), settings.autoLevelAmount / 10 * 10, { if (it == 0) "Off" else "$it %" }) { save(settings.copy(autoLevelAmount = it, presetName = "")) })
             val forced = limiterForcedBy()
-            card.addView(switchFactory("Limiter", settings.limiter,
-                "True-peak limiter, ceiling ${"%.2f".format(EqualizerDsp.LIMITER_CEILING_DB)} dBFS, 2 ms look-ahead. Digital peak protection only; it cannot protect the speakers." +
-                    if (forced.isNotEmpty()) "\nCurrently kept on by: ${forced.joinToString(", ")}." else "") { save(settings.copy(limiter = it, presetName = "")) })
+            card.addView(switchFactory("Limiter", !settings.limiterOff && (settings.limiter || forced.isNotEmpty()),
+                "True-peak limiter, ceiling ${"%.2f".format(EqualizerDsp.LIMITER_CEILING_DB)} dBFS, 2 ms look-ahead. Digital peak protection only; it cannot protect the speakers. Off means completely off, whatever auto level, loudness or the bass enhancer would prefer." +
+                    if (forced.isNotEmpty()) "\nCurrently kept on by: ${forced.joinToString(", ")}." else "") { save(settings.copy(limiter = it, limiterOff = !it, presetName = "")) })
             val detected = runCatching { LoudnessVolumeTracker.describe(context) }.getOrDefault("")
             card.addView(switchFactory("Loudness compensation (volume-linked)", settings.loudnessComp,
                 "Fuller bass and treble when the volume is low, nothing at full volume: a broad voicing inspired by equal-loudness contours, from the estimated Android volume. Needs the knob to be Android's volume." + (if (detected.isNotEmpty()) "\n$detected" else "")) {

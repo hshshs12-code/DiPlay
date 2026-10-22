@@ -18,7 +18,7 @@ import kotlin.math.tan
  * DiPlay's software audio chain on 16-bit interleaved PCM, applied in place before the AudioTrack
  * write. Stages in order: subsonic high-pass, 12-band graphic equalizer, up to five parametric
  * bands, volume-linked loudness compensation ([LoudnessCompensator]), de-essed air shelf
- * ([AirShelf]), psychoacoustic bass enhancer ([BassEnhancer]), stereo stage (width, crossfeed,
+ * ([AirShelf]), psychoacoustic bass enhancer ([BassEnhancer]), low-band soft clipper ([BassClipper]), stereo stage (width, crossfeed,
  * balance, driver-seat delay; see [StereoStage]), auto level ([Leveler]), true-peak look-ahead
  * limiter ([TruePeakLimiter]), TPDF dither.
  *
@@ -88,7 +88,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         val graphicDesign: DoubleArray, val graphicActive: BooleanArray,
         val parametricDesign: DoubleArray, val parametricActive: BooleanArray,
         val subsonicDesign: DoubleArray, val subsonicActive: Boolean,
-        val bassAmount: Int, val bassHz: Int,
+        val bassAmount: Int, val bassHz: Int, val bassClipDb: Int,
         val autoLevel: Boolean, val autoStrength: Double,
         val width: Int, val balance: Int, val delayTenths: Int, val driverSide: Int, val crossfeed: Int,
         val airDb: Int, val airHz: Int, val deEss: Int,
@@ -103,6 +103,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     private val subsonic = Bank(2)
     /** Psychoacoustic bass enhancer (LR4 split, envelope-tracked harmonic series); see [BassEnhancer]. */
     private val bass = BassEnhancer(sampleRate, channels)
+    /** Low-band soft clipper so bass bounds itself instead of making the limiter duck the mix; see [BassClipper]. */
+    private val clipper = BassClipper(sampleRate, channels)
     @Volatile private var subsonicOn = false
     /** De-essed air shelf; see [AirShelf]. */
     private val air = AirShelf(sampleRate, channels)
@@ -146,7 +148,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         val (pDesign, pActive) = designParametric(emptyList())
         val (sDesign, sActive) = designSubsonic(0)
         pending.set(Prepared(gDesign, gActive, pDesign, pActive, sDesign, sActive,
-            0, 100, false, 0.0, 100, 0, 0, 0, 0, 0, AirShelf.DEFAULT_HZ, 0, false, 0, limiter))
+            0, 100, 0, false, 0.0, 100, 0, 0, 0, 0, 0, AirShelf.DEFAULT_HZ, 0, false, 0, limiter))
     }
 
     /** Full configuration from the user's settings; [softClip] forces the limiter on (media soft clipper). */
@@ -157,7 +159,9 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         // Loudness compensation lifts bass by up to 15 dB at low volume and the bass enhancer adds
         // harmonics on top of a dry path that an all-pass can push past full scale: both need the
         // limiter in front of the DAC, as does auto level.
-        val useLimiter = softClip || (active && (settings.limiter || settings.autoLevel || loud || settings.bassEnhance > 0))
+        // The user's hard-off wins over every stage that would want the limiter: peaks then clip at full scale.
+        val useLimiter = if (active && settings.limiterOff) false
+            else softClip || (active && (settings.limiter || settings.autoLevel || loud || settings.bassEnhance > 0))
         this.limiter = useLimiter
         val auto = active && settings.autoLevel && settings.autoLevelAmount > 0
         if (auto && !autoPolicy) leveler.reset()   // queued: the audio thread performs it
@@ -167,7 +171,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         val (sDesign, sActive) = designSubsonic(if (active) settings.subsonicHz else 0)
         pending.set(Prepared(
             gDesign, gActive, pDesign, pActive, sDesign, sActive,
-            if (active) settings.bassEnhance else 0, settings.bassEnhanceHz,
+            if (active) settings.bassEnhance else 0, settings.bassEnhanceHz, if (active) settings.bassClipDb else 0,
             active && settings.autoLevel, settings.autoLevelAmount.coerceIn(0, 100) / 100.0,
             if (active) settings.stereoWidth else 100, if (active) settings.balance else 0,
             if (active) settings.driverSeatDelayTenthsMs else 0, settings.driverSide, if (active) settings.crossfeed else 0,
@@ -185,6 +189,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         subsonic.commit(p.subsonicDesign, BooleanArray(2) { p.subsonicActive })
         subsonicOn = subsonic.any
         bass.configure(p.bassAmount, p.bassHz)
+        clipper.configure(p.bassClipDb)
         leveler.strength = p.autoStrength
         autoOn = p.autoLevel && p.autoStrength > 0.0
         stage?.configure(p.width, p.balance, p.delayTenths, p.driverSide, p.crossfeed)
@@ -197,7 +202,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
         // With a limiter after it the enhancer may exceed full scale; without one it guards its own headroom.
         bass.headroomGuard = !p.limiter
         if (first) {
-            graphic.snap(); parametric.snap(); subsonic.snap(); bass.snap()
+            graphic.snap(); parametric.snap(); subsonic.snap(); bass.snap(); clipper.snap()
             configured = true
         } else {
             smoothSteps = rampSteps
@@ -290,12 +295,12 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     private fun run(data: ByteArray, offset: Int, length: Int): Boolean {
         pending.getAndSet(null)?.let { adopt(it) }
         val useLimiter = truePeak.busy
-        val g = graphic.any; val p = parametric.any; val sub = subsonicOn; val b = bass.active; val auto = autoOn
+        val g = graphic.any; val p = parametric.any; val sub = subsonicOn; val b = bass.active; val clip = clipper.active; val auto = autoOn
         val stereo = stage
         val st = stereo != null && stereo.isActive()
         val airOn = air.isActive
         val loudStage = loudness.enabled || loudness.busy
-        if (!g && !p && !sub && !b && !auto && !st && !airOn && !loudStage && !useLimiter) return false
+        if (!g && !p && !sub && !b && !clip && !auto && !st && !airOn && !loudStage && !useLimiter) return false
         val frames = length / (2 * channels)
         if (frames <= 0) return false
         ensureScratch(frames)
@@ -347,6 +352,7 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
                 // Stereo-linked stages: one mono control path for all channels.
                 if (airOn) air.processFrame(frame)
                 if (b) bass.process(frame)
+                if (clip) clipper.process(frame)
                 if (st) stereo!!.processFrame(frame)
                 val gain = if (auto) leveler.process(frame) else 1.0
                 val at = n * channels

@@ -21,6 +21,8 @@ data class AudioEffectSettings(
     val dspGainsDb: List<Int> = List(EqualizerDsp.BANDS) { 0 },
     /** Soft limiter after the software equalizer; off by default. */
     val limiter: Boolean = false,
+    /** Hard off: no limiter at all, even when auto level, loudness compensation or the bass enhancer would want one. */
+    val limiterOff: Boolean = false,
     val presetName: String = "",
     /** Subsonic high-pass corner in Hz; 0 = off. */
     val subsonicHz: Int = 0,
@@ -28,6 +30,8 @@ data class AudioEffectSettings(
     val bassEnhance: Int = 0,
     /** Crossover of the bass enhancer in Hz: content below it feeds the harmonic generator. */
     val bassEnhanceHz: Int = 100,
+    /** Soft clip of the band below 120 Hz at −N dBFS so bass never drives the limiter; 0 = off. Neutral here; the stored default and every bass preset use 3. */
+    val bassClipDb: Int = 0,
     /** Auto level (slow leveler) on/off and its strength 0..100 (100 = full normalisation). */
     val autoLevel: Boolean = false,
     val autoLevelAmount: Int = 50,
@@ -58,7 +62,7 @@ data class AudioEffectSettings(
 ) {
     /** True when any stage beyond the graphic equalizer is active. */
     fun hasAdvancedProcessing(): Boolean =
-        subsonicHz > 0 || bassEnhance > 0 || autoLevel || airDb > 0 || (loudnessComp && loudnessCompAmount > 0) ||
+        subsonicHz > 0 || bassEnhance > 0 || bassClipDb > 0 || autoLevel || airDb > 0 || (loudnessComp && loudnessCompAmount > 0) ||
             parametric.any { it.type != ParametricBand.OFF && it.gainTenths != 0 } || hasStereoStage()
 
     /** True when the stereo stage (width, balance, driver-seat delay, crossfeed) changes the signal. */
@@ -101,10 +105,12 @@ data class AudioEffectSettings(
         private const val KEY_DSP_MODE = "dsp_mode"
         private const val KEY_DSP_GAINS = "dsp_gains_db"
         private const val KEY_LIMITER = "limiter"
+        private const val KEY_LIMITER_OFF = "limiter_off"
         private const val KEY_PRESET = "preset"
         private const val KEY_SUBSONIC = "subsonic_hz"
         private const val KEY_BASS_ENHANCE = "bass_enhance"
         private const val KEY_BASS_ENHANCE_HZ = "bass_enhance_hz"
+        private const val KEY_BASS_CLIP = "bass_clip_db"
         private const val KEY_AUTO_LEVEL = "auto_level"
         private const val KEY_AUTO_LEVEL_AMOUNT = "auto_level_amount"
         private const val KEY_PARAMETRIC = "parametric"
@@ -144,10 +150,12 @@ data class AudioEffectSettings(
                 dspMode = prefs.getBoolean(KEY_DSP_MODE, false),
                 dspGainsDb = List(EqualizerDsp.BANDS) { dsp.getOrElse(it) { 0 }.coerceIn(-12, 12) },
                 limiter = prefs.getBoolean(KEY_LIMITER, false),
+                limiterOff = prefs.getBoolean(KEY_LIMITER_OFF, false),
                 presetName = prefs.getString(KEY_PRESET, "") ?: "",
                 subsonicHz = prefs.getInt(KEY_SUBSONIC, 0).coerceIn(0, 200),
                 bassEnhance = prefs.getInt(KEY_BASS_ENHANCE, 0).coerceIn(0, 100),
                 bassEnhanceHz = prefs.getInt(KEY_BASS_ENHANCE_HZ, 100).coerceIn(50, 200),
+                bassClipDb = prefs.getInt(KEY_BASS_CLIP, 3).coerceIn(0, BassClipper.MAX_CLIP_DB),
                 autoLevel = prefs.getBoolean(KEY_AUTO_LEVEL, false),
                 autoLevelAmount = prefs.getInt(KEY_AUTO_LEVEL_AMOUNT, 50).coerceIn(0, 100),
                 parametric = ParametricBand.decodeList(prefs.getString(KEY_PARAMETRIC, "")),
@@ -174,10 +182,12 @@ data class AudioEffectSettings(
                 .putBoolean(KEY_DSP_MODE, settings.dspMode)
                 .putString(KEY_DSP_GAINS, settings.dspGainsDb.joinToString(","))
                 .putBoolean(KEY_LIMITER, settings.limiter)
+                .putBoolean(KEY_LIMITER_OFF, settings.limiterOff)
                 .putString(KEY_PRESET, settings.presetName)
                 .putInt(KEY_SUBSONIC, settings.subsonicHz)
                 .putInt(KEY_BASS_ENHANCE, settings.bassEnhance)
                 .putInt(KEY_BASS_ENHANCE_HZ, settings.bassEnhanceHz)
+                .putInt(KEY_BASS_CLIP, settings.bassClipDb.coerceIn(0, BassClipper.MAX_CLIP_DB))
                 .putBoolean(KEY_AUTO_LEVEL, settings.autoLevel)
                 .putInt(KEY_AUTO_LEVEL_AMOUNT, settings.autoLevelAmount)
                 .putString(KEY_PARAMETRIC, settings.parametric.joinToString(",") { it.encode() })

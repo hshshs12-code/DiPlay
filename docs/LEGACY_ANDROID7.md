@@ -39,7 +39,20 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.38)
+## Fork features (0.2.13-legacy24.39)
+
+24.39: bass clip against ducking, limiter hard-off
+- `BassClipper`: a soft clipper on the band below 120 Hz, between the enhancer and the stereo
+  stage, so bass bounds itself before the full-band limiter. Without it every 808 past the ceiling
+  made the limiter pull the whole mix down and hold it there for the note (vocals ducked under the
+  bass); with it the limiter only sees mid and treble peaks. Setting `bass_clip_db`, default −3 dB,
+  off in the Flat and Podcast presets; level stepper under Advanced › Bass, on/off switch on the
+  Sound page. `BassClipperTest` shows a 1 kHz tone under a boosted 55 Hz 808 losing over 2 dB with
+  the limiter alone and under 0.7 dB with the clip.
+- Limiter hard-off (`limiter_off`): the Limiter switch on the Sound page and in Advanced now means
+  off completely, overriding auto level, loudness compensation and the bass enhancer (which 24.38
+  had started forcing it on). Peaks then clip at full scale; the status line says so. Presets clear
+  it.
 
 24.38: external DSP audit fixes, audit presets, Sound overview, two-card home, bigger targets
 - DSP, from the October 2026 external audit (every finding reproduced on the real code first,
