@@ -552,7 +552,8 @@ object IpodAudioEngine {
                         }
                     } else writeBytes(rendered.bytes!!, rendered.lengthBytes)
                 } else {
-                    dsp?.process(pcm, 0, length)
+                    val chain = dsp
+                    if (chain != null) chain.process(pcm, 0, length) else EqualizerDsp.scale(pcm, 0, length, EqualizerDsp.outputGain)
                     writeBytes(pcm, length)
                 }
             }

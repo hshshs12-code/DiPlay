@@ -86,6 +86,7 @@ class IpodModeActivity : Activity() {
     /** A message the driver has to act on; shown in the footer until the state moves on. */
     private var recoveryMessage: String? = null
     private var awaitingUsbPermission = false
+    private var volumeOverlay: VolumeOverlay? = null
     private val refresh = object : Runnable {
         override fun run() {
             render()
@@ -232,6 +233,7 @@ class IpodModeActivity : Activity() {
         content.addView(footer)
 
         buildSheet(root)
+        volumeOverlay = VolumeOverlay(this, root)
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(usbPermissionReceiver, IntentFilter(usbPermissionAction), Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -377,10 +379,12 @@ class IpodModeActivity : Activity() {
     override fun onResume() {
         super.onResume(); applyFullscreen()
         inForeground = true
+        volumeOverlay?.attach()
         runCatching { registerReceiver(attachReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED)) }
     }
     override fun onPause() {
         inForeground = false
+        volumeOverlay?.detach()
         handler.removeCallbacks(autoStart)
         runCatching { unregisterReceiver(attachReceiver) }
         super.onPause()

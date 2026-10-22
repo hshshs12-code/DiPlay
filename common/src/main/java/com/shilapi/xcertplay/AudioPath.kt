@@ -83,6 +83,7 @@ object AudioPath {
             log("audio path: vendor enhancements off → ${results.joinToString(", ")}; readback ${lastVendorResult}")
         }
         pinVolume(app, manager, log)
+        CleanVolume.begin(app, manager, log)
         synchronized(this) {
             sessions++
             if (receiver == null) {
@@ -92,6 +93,7 @@ object AudioPath {
                         if (intent.action != VOLUME_CHANGED || intent.getIntExtra(EXTRA_STREAM, -1) != AudioManager.STREAM_MUSIC) return
                         val value = intent.getIntExtra(EXTRA_VALUE, -1)
                         onMediaVolumeChanged(ctx.applicationContext, value, log)
+                        ctx.applicationContext.getSystemService(AudioManager::class.java)?.let { CleanVolume.onVolumeChanged(it, value, log) }
                     }
                 }
                 runCatching { app.registerReceiver(receiver, IntentFilter(VOLUME_CHANGED)) }
@@ -111,6 +113,7 @@ object AudioPath {
             if (sessions == 0) {
                 receiver?.let { runCatching { app.unregisterReceiver(it) } }
                 receiver = null
+                CleanVolume.end(app.getSystemService(AudioManager::class.java)) { Log.i(TAG, it) }
                 // No external volume change is inconclusive (the knob may simply not have been
                 // turned), so it never promotes the knob to HARDWARE: that would let the next
                 // session pin Android's volume to maximum on a software-volume unit. The watched
@@ -135,6 +138,12 @@ object AudioPath {
             lastVolumeNote = "Software volume detected; DiPlay stopped pinning it so the knob keeps working."
             log("audio path: $lastVolumeNote")
         }
+    }
+
+    /** Sets STREAM_MUSIC and remembers it, so the resulting broadcast is not taken for a knob movement. */
+    internal fun setMediaVolume(manager: AudioManager, index: Int): Boolean {
+        lastSetByUs = index; lastSetAt = SystemClock.elapsedRealtime()
+        return runCatching { manager.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0) }.isSuccess
     }
 
     private fun pinVolume(app: Context, manager: AudioManager, log: (String) -> Unit) {
@@ -179,6 +188,7 @@ object AudioPath {
             })
             knobEvidence(app).takeIf { it.isNotEmpty() }?.let { append(it).append(' ') }
             if (lastVolumeNote.isNotEmpty()) append(lastVolumeNote)
+            if (CleanVolume.enabled(app)) append("\nClean volume mode: ${if (CleanVolume.active) "active, unit parked at step ${CleanVolume.cleanStep}, DiPlay volume ${CleanVolume.describeLevel()}" else "on, parks the unit at step ${CleanVolume.step(app)} during sessions"}.")
             append("\nVendor enhancements: ").append(lastVendorResult.ifEmpty { if (AirPlayPersistence.loadDisableVendorEnhancements(app)) "switched off at the next session" else "left as the firmware set them" })
             append(".\nInstalled audio effects: ").append(if (effects.isEmpty()) "none reported" else effects.joinToString(", "))
         }

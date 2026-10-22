@@ -97,8 +97,8 @@ object LoudnessVolumeTracker {
             LoudnessCompensator.listeningLevelDb = 0.0
             return
         }
-        val index = runCatching { manager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
-        val max = runCatching { manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(0)
+        val index = if (CleanVolume.active) CleanVolume.virtualIndex else runCatching { manager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
+        val max = if (CleanVolume.active) CleanVolume.maxIndex else runCatching { manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(0)
         lastIndex = index; lastMax = max
         val reference = AudioEffectSettings.current(context).loudnessCompReferenceStep
         LoudnessCompensator.listeningLevelDb = levelDb(index, max, reference)

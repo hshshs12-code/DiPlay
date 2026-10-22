@@ -39,7 +39,18 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.39)
+## Fork features (0.2.13-legacy24.40)
+
+24.40: clean volume mode
+- `CleanVolume` + `VolumeOverlay`: the head unit distorted on every volume step except 20 (its
+  own loudness processing below, amplifier headroom above). With the mode on, a session parks the
+  Android media volume at the clean step, the VOLUME_CHANGED broadcasts from the knob move a
+  virtual level instead and the real index is put back each time; the level is applied as
+  `EqualizerDsp.outputGain` at the end of the chain (also to PCM that bypasses the chain: calls,
+  navigation, media without the software chain, iPod audio without a chain) and shown as a pill
+  on the CarPlay and iPod screens. The loudness compensation reads the virtual level. The last
+  session out restores the real index. Settings → Audio path: switch and clean step (1 … max,
+  default 20). Off by default; requires the knob to be detected as Android's software volume.
 
 24.39: bass clip against ducking, limiter hard-off
 - `BassClipper`: a soft clipper on the band below 120 Hz, between the enhancer and the stereo

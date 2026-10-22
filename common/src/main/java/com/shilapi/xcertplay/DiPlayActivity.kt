@@ -18,6 +18,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.net.Uri
 import android.os.Build
@@ -835,6 +836,12 @@ class DiPlayActivity : ComponentActivity() {
             sub("Float output to Android's mixer", "Hands Android 32-bit float samples; the first rounding to integer happens in the audio driver, not in DiPlay.", "float_output") { AirPlayPersistence.saveFloatOutput(this, it) }
             sub("Keep Android media volume at maximum", "Only after you set \"Knob is hardware\" below (DiPlay no longer guesses it from silence): Android's software volume then sits at 100 % so the mixer multiplies by 1. Does nothing while the knob type is unknown or software.", "pin_media_volume", reconnect = false) { AirPlayPersistence.savePinMediaVolume(this, it) }
             sub("Disable MediaTek sound enhancements", "Switches off BesLoudness / BesSurround / MusicPlus through the vendor audio interface at session start, when the firmware has them.", "disable_vendor_fx", reconnect = false) { AirPlayPersistence.saveDisableVendorEnhancements(this, it) }
+            val cleanMax = runCatching { getSystemService(AudioManager::class.java)?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull()?.takeIf { it > 0 } ?: 30
+            toggle(card, "Clean volume mode", "For units that distort on every volume step but one. During a CarPlay or iPod session the head unit is parked at its clean step and the knob drives DiPlay's own digital volume instead (float, no distortion at any level); the level shows on screen. When the session ends the unit gets its real volume back. Needs the knob to be Android's software volume.", CleanVolume.enabled(this)) {
+                CleanVolume.saveEnabled(this, it)
+                if (it && CarPlayBackgroundSession.hasSession()) toast("Applies at the next session")
+            }
+            choice(card, "Clean step (the one volume that does not distort)", (1..cleanMax).map { "$it of $cleanMax" }, CleanVolume.step(this).coerceIn(1, cleanMax) - 1, reconnects = false) { CleanVolume.saveStep(this, it + 1) }
             val pathReadout = label(AudioPath.describe(this), 13, MUTED).apply { setPadding(0, dp(6), 0, dp(6)) }
             card.addView(pathReadout)
             val knobRow = row()

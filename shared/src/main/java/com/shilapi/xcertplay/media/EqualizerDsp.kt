@@ -374,7 +374,8 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
     }
 
     /** 16-bit output with TPDF dither (two uniform draws, ±1 LSB triangular), or float when rendering to float. */
-    private fun put(data: ByteArray, o: Int, x: Double) {
+    private fun put(data: ByteArray, o: Int, v0: Double) {
+        val x = v0 * outputGain
         val f = floatOut
         if (f != null) { f[floatIndex++] = x.toFloat(); return }
         var r = ditherState
@@ -533,6 +534,13 @@ class EqualizerDsp(private val sampleRate: Int, private val channels: Int) {
 
         /** Shared pre-gain read by every renderer on each write; updated with the settings. */
         @Volatile var headroom: Float = 1f
+
+        /**
+         * Digital volume applied at the very end of the chain (before dither), 0..1. Driven by the
+         * clean-volume mode in `common`, which parks the head unit at its one undistorted step and
+         * does the knob's work here in float.
+         */
+        @Volatile var outputGain: Float = 1f
 
         /** Scales 16-bit interleaved PCM in place by [gain]. */
         fun scale(data: ByteArray, offset: Int, length: Int, gain: Float) {

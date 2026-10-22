@@ -124,6 +124,7 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private var connectionPanel: View? = null
     private var wifiRecoveryButton: View? = null
+    private var volumeOverlay: VolumeOverlay? = null
     private var reconnectAttempts = 0
     private val siriKey = WheelSiriKey()
     private val siriKeyPresses = WheelKeyPresses()
@@ -821,6 +822,7 @@ class CarPlayHostActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        volumeOverlay?.attach()
         val savedNightMode = AirPlayPersistence.loadCarPlayNightMode(this)
         val savedThreshold = AirPlayPersistence.loadAmbientLightThreshold(this)
         val savedDelay = AirPlayPersistence.loadAmbientDelaySeconds(this)
@@ -1225,6 +1227,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        volumeOverlay?.detach()
         nightModeController.pause()
         super.onPause()
     }
@@ -1524,6 +1527,8 @@ class CarPlayHostActivity : ComponentActivity() {
         stageStatusView = stage
         connectionPanel = viewport
         updateDebugOverlays()
+        // Last child on purpose: the layout test indexes the viewport as the third child.
+        volumeOverlay = VolumeOverlay(this, root)
         return root
     }
 

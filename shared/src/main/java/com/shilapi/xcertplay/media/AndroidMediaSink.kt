@@ -1495,6 +1495,11 @@ private class AudioRenderer(
         val stage = if (mappedChannel == AudioChannel.MEDIA) outputStage else null
         val rendered = if (stage != null) stage.render(data, offset, length) else null
         if (stage == null && mappedChannel == AudioChannel.MEDIA) eqDsp?.process(data, offset, length)
+        // Clean-volume mode: the chain applies the digital volume itself; PCM that bypasses it
+        // (calls, navigation, media without the software chain) is scaled here instead.
+        if (rendered == null && !(mappedChannel == AudioChannel.MEDIA && eqDsp != null)) {
+            EqualizerDsp.scale(data, offset, length, EqualizerDsp.outputGain)
+        }
         val outBytes: ByteArray? = if (rendered == null) data else rendered.bytes
         val outFloats: FloatArray? = rendered?.floats
         val outOffset = if (rendered == null) offset else 0

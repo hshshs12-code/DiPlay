@@ -35,7 +35,12 @@ class MediaOutputStage(
         if (inFloat.size < samples) inFloat = FloatArray(samples)
         val processor = dsp()
         val produced = if (processor != null) processor.processToFloat(data, offset, frames * channels * 2, inFloat)
-        else { convert(data, offset, samples, inFloat); samples }
+        else {
+            convert(data, offset, samples, inFloat)
+            val gain = EqualizerDsp.outputGain
+            if (gain < 0.999f) for (i in 0 until samples) inFloat[i] *= gain
+            samples
+        }
         var floats = inFloat
         var count = produced
         resampler?.let { r ->

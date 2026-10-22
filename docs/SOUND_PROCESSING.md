@@ -95,6 +95,14 @@ groups in Advanced collapse.
   "Knob is hardware" / "Knob is software" buttons set it by hand.
 - The readout shows hardware rate, track format, media volume, knob verdict, vendor readback and
   installed effects; the same text is in the diagnostic report.
+- **Clean volume mode** (`CleanVolume`): for units whose firmware volume table distorts on every
+  step but one (below the clean step its own loudness processing clips, above it the amplifier
+  gain runs out of headroom). During a session the Android media volume is parked at the clean
+  step and every knob step is folded into a digital volume at the end of DiPlay's chain
+  (`EqualizerDsp.outputGain`, applied before the single dither, curve `(index/max)²`). A pill
+  shows "Volume n / max" on the CarPlay and iPod screens; the loudness compensation follows the
+  virtual level. When the last session ends the real index is restored, so the radio and other
+  sources keep their behaviour. Needs a software knob; the clean step is a setting (default 20).
 
 ## Cost
 
