@@ -184,6 +184,19 @@ class DiPlayActivity : ComponentActivity() {
     private val export = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) exportDiagnostics(uri)
     }
+    private var collector: HeadUnitCollector? = null
+    private var pendingZip: File? = null
+    private val exportZip = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val zip = pendingZip
+        if (uri == null || zip == null) { if (zip != null) saveZipWithoutPicker(zip); return@registerForActivityResult }
+        Thread {
+            val result = runCatching { contentResolver.openOutputStream(uri)?.use { HeadUnitCollector.copy(zip, it) } ?: error("could not open the destination") }
+            runOnUiThread {
+                if (result.isSuccess) AlertDialog.Builder(this).setTitle("Head-unit data saved").setMessage("${zip.name} (${zip.length() / 1_000_000} MB) was written to the location you chose. Bring that file over for analysis.").setPositiveButton("OK", null).show()
+                else saveZipWithoutPicker(zip)
+            }
+        }.start()
+    }
 
     private var languagePreferenceAtCreate = AppLocale.SYSTEM
 
@@ -671,6 +684,8 @@ class DiPlayActivity : ComponentActivity() {
             uploadButton = button(if (uploadInProgress) "Uploading…" else "Upload diagnostic report", true) { uploadDiagnostics() }
                 .apply { isEnabled = !uploadInProgress }
             card.addView(uploadButton, matchButton(10, 60))
+            card.addView(button("Collect head-unit audio data…", false) { startCollector() }, matchButton(10, 60))
+            card.addView(label("Pulls the unit's audio and volume path apart into one zip for offline analysis: config files, the MCU, factory, radio and phone-link apps with their libraries, what Android's audio service reports, and, with \"ADB over network\" on in Developer options, the audio flinger state, every app's log, the mixer controls and a root probe. Guided captures tag the state while Android Auto plays, while DiPlay plays, and across a knob sweep. Takes a few minutes; save the zip to the USB stick.", 13, MUTED).apply { setPadding(0, dp(6), 0, dp(4)) })
             DiagnosticUpload.lastUrl(this)?.let { last ->
                 card.addView(label("Last upload: ${DiagnosticUpload.shortForm(last)}", 15, ACCENT, true).apply {
                     setTextIsSelectable(true); setPadding(0, dp(8), 0, 0)
@@ -3349,6 +3364,91 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun reportFileName() = "DiPlay-${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())}.txt"
+
+    private fun startCollector() {
+        val appContext = applicationContext
+        val collector = HeadUnitCollector(appContext) { buildDiagnosticReport(appContext) }
+        this.collector?.close()
+        this.collector = collector
+        val column = column().apply { setPadding(dp(24), dp(12), dp(24), dp(8)) }
+        val status = label("Starting…", 15, TEXT).apply { maxLines = 6 }
+        column.addView(status)
+        column.addView(label("While it works, do the guided captures in any order; each takes a snapshot of what the unit is doing at that moment. Finish when done.", 13, MUTED).apply { setPadding(0, dp(8), 0, dp(8)) })
+        val busy = java.util.concurrent.atomic.AtomicBoolean(true)
+        fun progress(text: String) = runOnUiThread { if (!isFinishing && !isDestroyed) status.text = text }
+        val aaButton = button("Capture: Android Auto playing at the loud step", false) {}
+        val diplayButton = button("Capture: DiPlay playing the same track, same step", false) {}
+        val sweepButton = button("Knob sweep: start (then turn 0 → max slowly)", false) {}
+        val finishButton = button("Finish and save the zip", true) {}
+        listOf(aaButton, diplayButton, sweepButton).forEach { column.addView(it, matchButton(8, 56)) }
+        column.addView(finishButton, matchButton(14, 64))
+        val dialog = AlertDialog.Builder(this).setTitle("Collect head-unit audio data")
+            .setView(ScrollView(this).apply { addView(column) })
+            .setNegativeButton("Cancel") { _, _ -> collector.close(); this.collector = null }
+            .setCancelable(false).create()
+        fun captureButton(view: Button, label: String) = view.setOnClickListener {
+            if (busy.get()) { toast("Wait for the current step to finish"); return@setOnClickListener }
+            busy.set(true); view.isEnabled = false
+            Thread {
+                runCatching { collector.capture(label, ::progress) }
+                runOnUiThread { busy.set(false); progress("Captured: $label"); view.text = "✓ $label" }
+            }.start()
+        }
+        captureButton(aaButton, "Android Auto playing")
+        captureButton(diplayButton, "DiPlay playing")
+        var sweeping = false
+        sweepButton.setOnClickListener {
+            if (busy.get()) { toast("Wait for the current step to finish"); return@setOnClickListener }
+            if (!sweeping) {
+                sweeping = true
+                Thread { runCatching { collector.knobSweepStart() }; runOnUiThread { sweepButton.text = "Knob sweep: done (tap once you reached max)" } }.start()
+            } else {
+                busy.set(true); sweepButton.isEnabled = false
+                Thread {
+                    runCatching { collector.knobSweepStop(::progress) }
+                    runOnUiThread { busy.set(false); progress("Knob sweep captured"); sweepButton.text = "✓ Knob sweep" }
+                }.start()
+            }
+        }
+        finishButton.setOnClickListener {
+            if (busy.get()) { toast("Wait for the current step to finish"); return@setOnClickListener }
+            busy.set(true); finishButton.isEnabled = false; progress("Packing the zip…")
+            Thread {
+                val zip = runCatching { collector.finish() }
+                runOnUiThread {
+                    dialog.dismiss(); this.collector = null
+                    zip.onSuccess { saveZip(it) }.onFailure { toast("Collector failed: ${it.message}") }
+                }
+            }.start()
+        }
+        dialog.show()
+        Thread {
+            runCatching {
+                collector.collectBasic(::progress)
+                val access = collector.openAdb(::progress)
+                if (access == com.shilapi.xcertplay.adb.LocalAdb.Access.READY) collector.collectAdb(::progress)
+                else collector.note("ADB $access: app-level data only")
+            }.onFailure { collector.note("collection failed: $it") }
+            runOnUiThread {
+                busy.set(false)
+                val access = collector.adbAccess
+                status.text = if (access == com.shilapi.xcertplay.adb.LocalAdb.Access.READY) "Collected with the unit's ADB. Now do the captures, then Finish."
+                else "Collected app-level data only (ADB $access). For the full set, turn on \"ADB over network\" in the unit's Developer options and run this again. You can still do the captures."
+            }
+        }.start()
+    }
+
+    private fun saveZip(zip: File) {
+        pendingZip = zip
+        runCatching { exportZip.launch(zip.name) }.onFailure { saveZipWithoutPicker(zip) }
+    }
+
+    private fun saveZipWithoutPicker(zip: File) {
+        val target = runCatching { File(getExternalFilesDir(null) ?: filesDir, zip.name).also { zip.copyTo(it, overwrite = true) } }.getOrNull() ?: zip
+        AlertDialog.Builder(this).setTitle("Head-unit data saved in the app")
+            .setMessage("No file picker on this unit. The zip is at:\n${target.absolutePath}\n\nCopy it with a file manager, or enable ADB and pull it.")
+            .setPositiveButton("OK", null).show()
+    }
 
     private fun chooseReportDestination() {
         // Some head units omit or disable DocumentsUI. Launch itself can throw, before

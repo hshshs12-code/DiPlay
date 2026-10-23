@@ -39,7 +39,16 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.42)
+## Fork features (0.2.13-legacy24.43)
+
+24.43: head-unit audio data collector
+- `HeadUnitCollector` + Settings → Diagnostics → "Collect head-unit audio data…": app-level data
+  (audio service report, config files, relevant APKs and native libraries, kernel and device
+  listings) plus, through the unit's own ADB on localhost, dumpsys audio / audio_flinger /
+  audio_policy, tinymix, logcat, `.ini` search, root probe; guided captures (Android Auto playing,
+  DiPlay playing, knob sweep) tag snapshots; everything packed into one zip saved through the
+  document picker or into the app's external files. `LocalAdb` command timeout raised to 120 s.
+  See docs/HEAD_UNIT_COLLECTOR.md.
 
 24.42: output path A/B and vendor-enhancement restore
 - Android Auto on the same unit is louder and clean on the top volume steps because it plays

@@ -171,6 +171,6 @@ class LocalAdb(
         const val READ_TIMEOUT_MS = 5_000
         const val APPROVAL_TIMEOUT_MS = 60_000
         const val APPROVAL_RECHECK_MS = 1_000
-        const val MAX_COMMAND_TIMEOUT_MS = 30_000
+        const val MAX_COMMAND_TIMEOUT_MS = 120_000
     }
 }
