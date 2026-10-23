@@ -32,9 +32,32 @@ reverse-engineering tools. Nothing on the unit is changed.
 | `config-files/` | Audio policy and volume tables, mixer paths, effects config, MediaTek audio parameters, any `.ini` in the usual places |
 | `packages.txt`, `apks/`, `apk-libs/` | Package list; the MCU, factory, radio, Bluetooth, phone-link and audio apps with their native libraries |
 | `libs/`, `libs-index.txt` | Audio HAL, effect, MCU and serial libraries from the system and vendor partitions |
+| `vendor-probe.txt` | (24.44) Vendor framework classes visible to apps (AutoChips audio-processor API, metazone, MCU serial), device-node permissions, the HAL tuning keys EngineerMode uses, the decoded HAL volume table, the global effects on audio session 0 |
 | `proc.txt` | Sound cards, device nodes, tty and i2c listings |
 | `adb/` | With ADB: root probe, dumpsys audio / audio_flinger / audio_policy, tinymix, `.ini` search and contents, full and audio-filtered logcat, mounts |
 | `captures/` | The tagged snapshots: audio flinger, audio service, mixer controls and log tail per capture; the knob sweep's logcat |
+
+## What the first run found (9212A, ac8227l, build F9212A_00017_V001)
+
+Decompiling the collected apps and HAL libraries settled where the gain is on this board:
+
+- No amplifier or audio-processor chip that software can address. The vendor Sound Effects app
+  (`com.xy.tda7729`) picks one of three board variants from the build string; builds containing
+  `00017` get the "internal" variant (SoC codec only). Its TDA7729 master-volume API
+  (`com.autochips.audiosettings.AudioSettings` → HIDL → ALSA `TDA7729*` controls) exists for the
+  other boards. The power amp is fixed gain, switched by the `XY_AMP_CTRL_ONOFF` ioctl on
+  `/dev/mygpio`.
+- Gain stages that do exist: Android's stream volume (4-point curve, same in /vendor/etc); the
+  MediaTek HAL volume controller with its NVRAM per-step table (speaker PGA plus digital gain),
+  edited by EngineerMode and readable with `GetBuffer=` (see `HalVolumeTable`); the vendor's global
+  effects on audio session 0 (LVM equalizer up to ±15 dB, bass boost, virtualizer, reverb, applied
+  under package name com.android.systemui by the Sound Effects app's service); BesLoudness,
+  MusicPlus and BesSurround in the HAL.
+- `VolumePosControl` is the stock LVM Volume effect; its "position" is stereo balance.
+
+24.44 adds the handles that follow from this: Sound → "Neutralise head-unit effects" (reads and
+holds the session-0 effects flat), Diagnostics → "Read the firmware volume table" and "Open
+EngineerMode", and the vendor probe in the collector.
 
 ## What the analysis looks for
 

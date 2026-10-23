@@ -64,6 +64,9 @@ class HeadUnitCollector(context: Context, private val report: () -> String) {
         progress("Native libraries")
         copyLibraries()
 
+        progress("Vendor audio probe")
+        write("vendor-probe.txt", runCatching { vendorProbe() }.getOrElse { "probe failed: $it" })
+
         progress("Kernel and device nodes")
         write("proc.txt", buildString {
             for (p in listOf("/proc/cpuinfo", "/proc/version", "/proc/devices", "/proc/asound/cards", "/proc/asound/pcm", "/proc/asound/modules", "/proc/mounts"))
@@ -92,6 +95,50 @@ class HeadUnitCollector(context: Context, private val report: () -> String) {
         runCatching { manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).forEach { d -> appendLine("type=${d.type} name=${d.productName} id=${d.id} rates=${d.sampleRates.joinToString("/")} channels=${d.channelCounts.joinToString("/")} encodings=${d.encodings.joinToString("/")}") } }
         appendLine("--- effects")
         runCatching { AudioEffect.queryEffects()?.forEach { appendLine("${it.name} by ${it.implementor} type=${it.type} uuid=${it.uuid} connect=${it.connectMode}") } }
+    }
+
+    /**
+     * What else an app can reach on this unit, read-only: the vendor framework classes the system
+     * apps call (the AutoChips audio-processor API, the metazone board record, the MCU serial
+     * class), the permissions on the device nodes behind them, the HAL's tuning keys that
+     * EngineerMode uses, the global effects on audio session 0 and the HAL volume table.
+     */
+    private fun vendorProbe(): String = buildString {
+        appendLine("=== vendor framework classes (visible to apps when on the boot classpath)")
+        for (name in listOf("com.autochips.audiosettings.AudioSettings", "com.autochips.audiosettings.Audio1701Settings",
+            "com.autochips.audiosettings.VolumePosControl", "com.autochips.audiosettings.ControlPanelEffect",
+            "com.autochips.metazone.AtcMetazone", "Xynewkeyinfo.SerialPort", "com.mediatek.engineermode.audio.AudioTuningJni")) {
+            val cls = runCatching { Class.forName(name) }
+            appendLine("$name: " + cls.fold({ c ->
+                "present; methods: " + c.declaredMethods.sortedBy { it.name }.joinToString(" ") { m -> m.name + "(" + m.parameterTypes.joinToString(",") { it.simpleName } + ")" }.take(1500)
+            }, { "absent (${it.javaClass.simpleName})" }))
+        }
+        runCatching {
+            val c = Class.forName("com.autochips.metazone.AtcMetazone")
+            val m = c.getMethod("readval", Int::class.javaPrimitiveType, IntArray::class.java)
+            val out = IntArray(1)
+            val r = m.invoke(null, 0x100cf, out)
+            appendLine("AtcMetazone.readval(0x100cf) [the sound-chip / hifi word the vendor sound app reads] -> ret=$r value=${out[0]}")
+        }.onFailure { appendLine("AtcMetazone.readval: ${it.javaClass.simpleName}: ${it.message ?: (it.cause?.message ?: "")}") }
+        appendLine("=== device nodes")
+        appendLine(run("ls", "-l", "/dev/mygpio", "/dev/snd", "/dev/ttyMT0", "/dev/ttyMT1", "/dev/ttyMT2", "/dev/ttyMT3",
+            "/dev/i2c-0", "/dev/i2c-1", "/dev/i2c-2", "/dev/i2c-3", "/dev/kd_camera_hw", "/dev/hwbinder", "/dev/binder"))
+        for (p in listOf("/dev/mygpio", "/dev/snd/controlC0", "/dev/hwbinder")) appendLine("$p canRead=${File(p).canRead()} canWrite=${File(p).canWrite()}")
+        appendLine("=== HAL tuning keys, read-only (what EngineerMode asks)")
+        val manager = app.getSystemService(AudioManager::class.java)
+        if (manager == null) appendLine("AudioManager unavailable") else {
+            for (key in listOf("GET_AUDIO_VOLUME_VERSION", "GET_CUST_XML_ENABLE", "GetCmd=${HalVolumeTable.SIZE_COMMAND}",
+                "GetBuffer=${HalVolumeTable.GET_CUSTOMER_DATA},${HalVolumeTable.EXPECTED_SIZE}", "GetAudioCustomDataSize", "GetEMParameter",
+                "GetFmEnable", "GetMusicPlusStatus", "GetBesLoudnessStatus", "GetHiFiDACStatus", "GetDRCVersion"))
+                appendLine("$key -> ${runCatching { manager.getParameters(key) ?: "(null)" }.getOrElse { "error ${it.javaClass.simpleName}" }.take(700)}")
+            appendLine("=== HAL volume table (decoded)")
+            appendLine(runCatching { HalVolumeTable.read(manager).describe() }.getOrElse { "failed: $it" })
+        }
+        appendLine("=== global effects on audio session 0 (the vendor sound app's)")
+        appendLine(runCatching { VendorEffects.read().describe() }.getOrElse { "failed: $it" })
+        appendLine("=== vendor apps")
+        for (pkg in listOf("com.xy.tda7729", "com.mediatek.engineermode", "com.xyauto.Settings", "com.xygala.launcherall", "com.pve.apsbridge"))
+            appendLine("$pkg: " + runCatching { app.packageManager.getPackageInfo(pkg, 0).versionName }.fold({ "installed $it" }, { "absent" }))
     }
 
     private val configName = Regex("(?i)(audio|volume|mixer|bes|loudness|ivi|mcu|jancar|car|amp|sound|eq|dsp|tuning|\\.ini$|\\.xml$|\\.conf$|\\.cfg$|\\.txt$)")

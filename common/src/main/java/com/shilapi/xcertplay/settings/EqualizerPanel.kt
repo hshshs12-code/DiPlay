@@ -9,12 +9,16 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.shilapi.xcertplay.AirPlayPersistence
 import com.shilapi.xcertplay.LoudnessVolumeTracker
+import com.shilapi.xcertplay.VendorEffects
 import com.shilapi.xcertplay.media.AirShelf
 import com.shilapi.xcertplay.media.AudioEffectSettings
 import com.shilapi.xcertplay.media.EqPresets
@@ -147,6 +151,33 @@ class EqualizerPanel(
             setPadding(dp(16), dp(8), dp(16), dp(8)); background = rounded(Color.argb(20, 255, 255, 255), Color.argb(50, 255, 255, 255))
         }
         body.addView(state, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+
+        // The head unit's own global effects (audio session 0): the vendor sound app's equalizer,
+        // bass boost, virtualizer and reverb shape every app's output, DiPlay's included.
+        val unitFx = TextView(context).apply {
+            textSize = 15f; setTextColor(mutedColor); gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(56)
+            setPadding(dp(16), dp(8), dp(16), dp(8)); background = rounded(Color.argb(20, 255, 255, 255), Color.argb(50, 255, 255, 255))
+            text = "Head-unit effects: reading…"
+        }
+        body.addView(heading("Head unit's own effects", "What the unit's Sound Effects app applies to everything, after DiPlay and before the amplifier."),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
+        body.addView(unitFx, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        val main = Handler(Looper.getMainLooper())
+        fun showUnitFx(snapshot: VendorEffects.Snapshot) {
+            val held = if (VendorEffects.neutralising) "   ·   held flat by DiPlay" else ""
+            unitFx.text = "Head-unit effects: ${snapshot.describe()}$held"
+        }
+        body.addView(switchFactory("Neutralise head-unit effects", AirPlayPersistence.loadNeutraliseVendorEffects(context),
+            "Takes control of the unit's equalizer, bass boost, virtualizer and reverb on the global output and holds them flat and off while DiPlay runs (also at every session start). Off: hands them back with the values they had. The unit's own Sound Effects settings are not changed.") { on ->
+            AirPlayPersistence.saveNeutraliseVendorEffects(context, on)
+            unitFx.text = if (on) "Head-unit effects: taking control…" else "Head-unit effects: handing back…"
+            Thread {
+                val snapshot = runCatching { VendorEffects.neutralise(on) { } }.getOrElse { VendorEffects.read() }
+                main.post { showUnitFx(snapshot) }
+            }.start()
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        Thread { val snapshot = runCatching { VendorEffects.read() }.getOrNull(); main.post { if (snapshot != null) showUnitFx(snapshot) else unitFx.text = "Head-unit effects: not readable on this unit" } }.start()
+
         val doors = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         doors.addView(buttonFactory("All presets") { soundPage = SoundPage.ALL_PRESETS; rebuild() }, LinearLayout.LayoutParams(0, dp(64), 1f).apply { rightMargin = dp(10) })
         doors.addView(buttonFactory("Advanced  ›") { soundPage = SoundPage.ADVANCED; rebuild() }, LinearLayout.LayoutParams(0, dp(64), 1f))

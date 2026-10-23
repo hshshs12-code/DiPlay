@@ -39,7 +39,21 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.43)
+## Fork features (0.2.13-legacy24.44)
+
+24.44: the handles the head-unit analysis turned up
+- `VendorEffects`: reads the vendor sound app's global effects on audio session 0 (LVM equalizer,
+  bass boost, virtualizer, preset reverb) and, with Sound → "Neutralise head-unit effects", takes
+  control at a higher priority and holds them flat and off while DiPlay runs (re-applied at every
+  session start by `AudioPath`); off hands them back with their previous values.
+- `HalVolumeTable`: reads the MediaTek HAL's per-step volume table the way EngineerMode does
+  (`GET_AUDIO_VOLUME_VERSION`, `GetCmd=5`, `GetBuffer=256,<size>`, base64) and decodes the
+  version-1 layout (9 types × 4 modes × 15 levels); Diagnostics → "Read the firmware volume table".
+- `EngineerMode`: Diagnostics → "Open EngineerMode" starts the unit's exported MediaTek
+  EngineerMode main menu, whose Audio pages edit that table live.
+- Collector: `vendor-probe.txt` (vendor framework classes, device-node permissions, HAL tuning
+  keys, decoded volume table, session-0 effects, vendor apps). See docs/HEAD_UNIT_COLLECTOR.md
+  for what the first collected zip showed.
 
 24.43: head-unit audio data collector
 - `HeadUnitCollector` + Settings → Diagnostics → "Collect head-unit audio data…": app-level data

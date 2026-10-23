@@ -220,6 +220,9 @@ object AirPlayPersistence {
     fun savePinMediaVolume(context: Context, enabled: Boolean) = saveTuned(context, "pin_media_volume", enabled)
     fun loadDisableVendorEnhancements(context: Context): Boolean = tuned(context, "disable_vendor_fx")
     fun saveDisableVendorEnhancements(context: Context, enabled: Boolean) = saveTuned(context, "disable_vendor_fx", enabled)
+    /** Hold the head unit's own global effects (session-0 equalizer, bass boost, virtualizer, reverb) flat while DiPlay runs. Off by default. */
+    fun loadNeutraliseVendorEffects(context: Context): Boolean = tuned(context, "neutralise_vendor_fx", default = false)
+    fun saveNeutraliseVendorEffects(context: Context, enabled: Boolean) = saveTuned(context, "neutralise_vendor_fx", enabled)
     fun loadSoftClipMedia(context: Context): Boolean = tuned(context, "soft_clip_media")
     fun saveSoftClipMedia(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("soft_clip_media", enabled).apply()

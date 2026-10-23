@@ -685,7 +685,15 @@ class DiPlayActivity : ComponentActivity() {
                 .apply { isEnabled = !uploadInProgress }
             card.addView(uploadButton, matchButton(10, 60))
             card.addView(button("Collect head-unit audio data…", false) { startCollector() }, matchButton(10, 60))
-            card.addView(label("Pulls the unit's audio and volume path apart into one zip for offline analysis: config files, the MCU, factory, radio and phone-link apps with their libraries, what Android's audio service reports, and, with \"ADB over network\" on in Developer options, the audio flinger state, every app's log, the mixer controls and a root probe. Guided captures tag the state while Android Auto plays, while DiPlay plays, and across a knob sweep. Takes a few minutes; save the zip to the USB stick.", 13, MUTED).apply { setPadding(0, dp(6), 0, dp(4)) })
+            card.addView(label("Pulls the unit's audio and volume path apart into one zip for offline analysis: config files, the MCU, factory, radio and phone-link apps with their libraries, what Android's audio service reports, a probe of the vendor audio classes, device nodes, HAL tuning keys and global effects, and, with \"ADB over network\" on in Developer options, the audio flinger state, every app's log, the mixer controls and a root probe. Guided captures tag the state while Android Auto plays, while DiPlay plays, and across a knob sweep. Takes a few minutes; save the zip to the USB stick.", 13, MUTED).apply { setPadding(0, dp(6), 0, dp(4)) })
+            card.addView(button("Read the firmware volume table", false) { showHalVolumeTable() }, matchButton(10, 60))
+            card.addView(label("Asks the MediaTek audio HAL for its per-step volume table the way the unit's EngineerMode does (read-only): 15 levels per mode, 0–255 each, for the Media type that music plays through. Nothing is changed.", 13, MUTED).apply { setPadding(0, dp(6), 0, dp(4)) })
+            if (EngineerMode.installed(this)) {
+                card.addView(button("Open EngineerMode (edit the volume table)", false) {
+                    EngineerMode.open(this).onFailure { toast("EngineerMode would not open: ${it.message}") }
+                }, matchButton(10, 60))
+                card.addView(label(EngineerMode.HINT, 13, MUTED).apply { setPadding(0, dp(6), 0, dp(4)) })
+            }
             DiagnosticUpload.lastUrl(this)?.let { last ->
                 card.addView(label("Last upload: ${DiagnosticUpload.shortForm(last)}", 15, ACCENT, true).apply {
                     setTextIsSelectable(true); setPadding(0, dp(8), 0, 0)
@@ -3434,6 +3442,25 @@ class DiPlayActivity : ComponentActivity() {
                 val access = collector.adbAccess
                 status.text = if (access == com.shilapi.xcertplay.adb.LocalAdb.Access.READY) "Collected with the unit's ADB. Now do the captures, then Finish."
                 else "Collected app-level data only (ADB $access). For the full set, turn on \"ADB over network\" in the unit's Developer options and run this again. You can still do the captures."
+            }
+        }.start()
+    }
+
+    /** Reads the HAL volume table off the main thread and shows it in a selectable monospace dialog. */
+    private fun showHalVolumeTable() {
+        val manager = getSystemService(AudioManager::class.java) ?: run { toast("No audio service"); return }
+        toast("Reading the volume table…")
+        Thread {
+            val text = runCatching { HalVolumeTable.read(manager).describe() }.getOrElse { "Read failed: $it" }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val view = android.widget.TextView(this).apply {
+                    typeface = Typeface.MONOSPACE; textSize = 12f; setTextIsSelectable(true); setTextColor(TEXT)
+                    setPadding(dp(16), dp(8), dp(16), dp(8)); this.text = text
+                }
+                AlertDialog.Builder(this).setTitle("Firmware volume table")
+                    .setView(ScrollView(this).apply { addView(view) })
+                    .setPositiveButton("OK", null).show()
             }
         }.start()
     }

@@ -112,6 +112,8 @@ object AudioPath {
             }
         }
         pinVolume(app, manager, log)
+        // The unit's own global effects (session 0) sit between DiPlay and the HAL; hold them flat when asked.
+        VendorEffects.applyIfEnabled(app, log)
         CleanVolume.begin(app, manager, log)
         synchronized(this) {
             sessions++
