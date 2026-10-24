@@ -10,6 +10,7 @@ struct ContentView: View {
             EqualizerTab().tabItem { Label("EQ", systemImage: "waveform.path.ecg") }
             StagesTab().tabItem { Label("Stages", systemImage: "switch.2") }
             StereoTab().tabItem { Label("Stereo", systemImage: "speaker.wave.2") }
+            UnitEqTab().tabItem { Label("Unit EQ", systemImage: "hifispeaker") }
             UnitTab().tabItem { Label("Unit", systemImage: "car") }
         }
         .alert("The head unit said", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.lastError = nil } })) {
@@ -318,12 +319,16 @@ struct UnitTab: View {
                     }
                     SectionCard(title: "Head unit's own effects", subtitle: "What the unit's Sound Effects app applies to everything, after DiPlay and before the amplifier.") {
                         Text(store.unitFx.text.isEmpty ? "—" : store.unitFx.text).font(.footnote).foregroundStyle(.secondary)
-                        ToggleRow(title: "Neutralise head-unit effects",
-                                  detail: store.unitFx.neutralised ? "DiPlay holds them flat and off while it runs." : "Takes control of the unit's equalizer, bass boost, virtualizer and reverb and holds them flat.",
-                                  isOn: Binding(get: { store.unitFx.enabled }, set: { store.setNeutralise($0) }))
-                            .disabled(!store.hasState)
+                        Picker("Mode", selection: Binding(get: { store.unitFx.mode }, set: { store.setUnitFxMode($0) })) {
+                            Text("Leave alone").tag(UnitFx.modeOff)
+                            Text("Hold flat").tag(UnitFx.modeNeutral)
+                            Text("Drive from here").tag(UnitFx.modeDirect)
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(!store.hasState)
+                        Text(modeDetail).font(.caption).foregroundStyle(.secondary)
                     }
-                    SectionCard(title: "Head-unit media volume", subtitle: store.volume.max > 0 ? "Android's media volume on the unit, \(store.volume.index) of \(store.volume.max)." : "Not reported yet.") {
+                    SectionCard(title: "Head-unit volume", subtitle: store.volume.max > 0 ? "Android's media volume on the unit, \(store.volume.index) of \(store.volume.max)." : "Not reported yet.") {
                         if store.volume.max > 0 {
                             Slider(value: $volumeDraft, in: 0...Double(store.volume.max), step: 1) { editing in
                                 dragging = editing
@@ -332,14 +337,27 @@ struct UnitTab: View {
                             .onAppear { volumeDraft = Double(max(0, store.volume.index)) }
                             .onChange(of: store.volume.index) { _, index in if !dragging { volumeDraft = Double(max(0, index)) } }
                             HStack {
-                                Button { store.setVolume(max(0, store.volume.index - 1)) } label: { Image(systemName: "speaker.minus").frame(width: 60, height: 44) }
+                                Button { store.adjustVolume(-1) } label: { Image(systemName: "speaker.minus").frame(width: 60, height: 44) }
                                 Spacer()
                                 Text("\(Int(volumeDraft.rounded()))").font(.title2.monospacedDigit().weight(.semibold))
                                 Spacer()
-                                Button { store.setVolume(min(store.volume.max, store.volume.index + 1)) } label: { Image(systemName: "speaker.plus").frame(width: 60, height: 44) }
+                                Button { store.adjustVolume(1) } label: { Image(systemName: "speaker.plus").frame(width: 60, height: 44) }
                             }
                             .buttonStyle(.bordered)
                         }
+                        if store.volume.muted && !store.volume.dndAccess {
+                            Label("The unit is muted and DiPlay has no Do Not Disturb access, so Android refuses volume changes. On the unit: DiPlay Settings → Audio path → \"Allow Do Not Disturb access\". Until then the buttons move DiPlay's own level below.", systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                        if !store.volume.note.isEmpty { Text("Last change: \(store.volume.note)").font(.caption).foregroundStyle(.secondary) }
+                        ToggleRow(title: "Phone volume buttons move the unit's volume",
+                                  detail: store.buttons.active ? "Watching the buttons: \(store.buttons.lastEvent)." : "While this app is open or in the background with the cable in. The phone's own level sits one step below full and is put back after every press.",
+                                  isOn: $store.volumeButtons)
+                        Text("DiPlay's own level in iPod mode (always works, even when Android refuses): \(store.volume.digital) %").font(.caption).foregroundStyle(.secondary)
+                        Slider(value: Binding(get: { Double(store.volume.digital) }, set: { store.volume.digital = Int($0) }), in: 0...100, step: 5) { editing in
+                            if !editing { store.setDigitalVolume(store.volume.digital) }
+                        }
+                        .disabled(!store.hasState)
                     }
                     SectionCard(title: "Your presets", subtitle: store.userPresets.isEmpty ? "None saved yet. Use the Sound tab to save one." : "Saved on the head unit. Swipe left on the car screen's list, or delete here.") {
                         ForEach(store.userPresets, id: \.self) { name in
@@ -361,5 +379,84 @@ struct UnitTab: View {
             }
             .navigationTitle("Head unit")
         }
+    }
+
+    private var modeDetail: String {
+        switch store.unitFx.mode {
+        case UnitFx.modeNeutral: return "DiPlay holds the unit's equalizer, bass boost, virtualizer and reverb flat and off while it runs."
+        case UnitFx.modeDirect: return "DiPlay's own processing is parked; the Unit EQ tab drives the unit's effects directly. Switching back restores DiPlay's processing."
+        default: return "The unit's effects stay as its Sound Effects app set them."
+        }
+    }
+}
+
+// MARK: - Unit EQ: the head unit's own equalizer, bass boost, virtualizer and reverb, driven directly
+
+struct UnitEqTab: View {
+    @EnvironmentObject var store: SoundStore
+
+    private var stepsDb: ClosedRange<Int> { (store.unitFx.eq.minMb / 100)...(store.unitFx.eq.maxMb / 100) }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    ConnectionBanner()
+                    SectionCard(title: "Drive the head unit's effects", subtitle: "The unit's own equalizer (the one its Sound Effects app sets, often with a few bands at −4 dB), bass boost, virtualizer and reverb, controlled from here.") {
+                        ToggleRow(title: "Direct control",
+                                  detail: store.unitFx.direct ? "On: DiPlay's own processing is parked, these sliders are the sound." : "Off. Turning this on parks DiPlay's processing (presets, 12-band EQ, limiter and the rest) and hands the sound to the unit's own effects, set from here.",
+                                  isOn: Binding(get: { store.unitFx.direct }, set: { store.setUnitFxMode($0 ? UnitFx.modeDirect : UnitFx.modeOff) }))
+                            .disabled(!store.hasState)
+                        if !store.unitFx.available {
+                            Text("The unit reports no reachable effects.").font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                    SectionCard(title: "Unit equalizer", subtitle: store.unitFx.eq.hz.isEmpty ? "Not reported yet." : "\(store.unitFx.eq.hz.count) bands, \(stepsDb.lowerBound) to +\(stepsDb.upperBound) dB.") {
+                        ToggleRow(title: "Equalizer on", detail: "", isOn: Binding(get: { store.unitFx.eq.enabled }, set: { on in store.editUnitFx { $0.eq.enabled = on } }))
+                        HStack(alignment: .bottom, spacing: 10) {
+                            ForEach(Array(store.unitFx.eq.hz.enumerated()), id: \.offset) { index, hz in
+                                VStack(spacing: 6) {
+                                    Text(bandText(index)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                                    VerticalSlider(value: Binding(get: { (store.unitFx.eq.mb.indices.contains(index) ? store.unitFx.eq.mb[index] : 0) / 100 },
+                                                                  set: { db in store.editUnitFx { fx in
+                                                                      if fx.eq.mb.count < fx.eq.hz.count { fx.eq.mb += Array(repeating: 0, count: fx.eq.hz.count - fx.eq.mb.count) }
+                                                                      fx.eq.mb[index] = db * 100 } }),
+                                                   range: stepsDb)
+                                        .frame(height: 240)
+                                    Text(hzLabel(hz)).font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        Button("Flat") { store.editUnitFx { fx in fx.eq.mb = Array(repeating: 0, count: fx.eq.hz.count) } }.buttonStyle(.bordered)
+                    }
+                    .disabled(!store.unitFx.direct)
+                    .opacity(store.unitFx.direct ? 1 : 0.45)
+                    SectionCard(title: "Unit bass boost, virtualizer, reverb") {
+                        ToggleRow(title: "Bass boost", detail: store.unitFx.bass.available ? "" : "Not reachable on this unit.",
+                                  isOn: Binding(get: { store.unitFx.bass.enabled }, set: { on in store.editUnitFx { $0.bass.enabled = on } }))
+                        StepRow(title: "Bass boost strength", values: Array(stride(from: 0, through: 1000, by: 50)), value: store.unitFx.bass.strength,
+                                label: { "\($0 / 10) %" }, onChange: { v in store.editUnitFx { $0.bass.strength = v } })
+                        ToggleRow(title: "Virtualizer", detail: store.unitFx.virt.available ? "" : "Not reachable on this unit.",
+                                  isOn: Binding(get: { store.unitFx.virt.enabled }, set: { on in store.editUnitFx { $0.virt.enabled = on } }))
+                        StepRow(title: "Virtualizer strength", values: Array(stride(from: 0, through: 1000, by: 50)), value: store.unitFx.virt.strength,
+                                label: { "\($0 / 10) %" }, onChange: { v in store.editUnitFx { $0.virt.strength = v } })
+                        ToggleRow(title: "Reverb", detail: store.unitFx.reverb.available ? "" : "Not reachable on this unit.",
+                                  isOn: Binding(get: { store.unitFx.reverb.enabled }, set: { on in store.editUnitFx { $0.reverb.enabled = on } }))
+                        ChoiceRow(title: "Reverb preset", options: Array(UnitFx.reverbNames.enumerated()).map { ($0.offset, $0.element) }, selection: store.unitFx.reverb.preset) { v in store.editUnitFx { $0.reverb.preset = v } }
+                    }
+                    .disabled(!store.unitFx.direct)
+                    .opacity(store.unitFx.direct ? 1 : 0.45)
+                }
+                .padding(16)
+            }
+            .navigationTitle("Unit EQ")
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }.disabled(!store.connected) } }
+        }
+    }
+
+    private func bandText(_ index: Int) -> String {
+        let mb = store.unitFx.eq.mb.indices.contains(index) ? store.unitFx.eq.mb[index] : 0
+        let db = mb / 100
+        return db > 0 ? "+\(db)" : "\(db)"
     }
 }

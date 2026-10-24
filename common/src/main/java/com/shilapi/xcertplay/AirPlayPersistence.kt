@@ -220,9 +220,23 @@ object AirPlayPersistence {
     fun savePinMediaVolume(context: Context, enabled: Boolean) = saveTuned(context, "pin_media_volume", enabled)
     fun loadDisableVendorEnhancements(context: Context): Boolean = tuned(context, "disable_vendor_fx")
     fun saveDisableVendorEnhancements(context: Context, enabled: Boolean) = saveTuned(context, "disable_vendor_fx", enabled)
-    /** Hold the head unit's own global effects (session-0 equalizer, bass boost, virtualizer, reverb) flat while DiPlay runs. Off by default. */
-    fun loadNeutraliseVendorEffects(context: Context): Boolean = tuned(context, "neutralise_vendor_fx", default = false)
-    fun saveNeutraliseVendorEffects(context: Context, enabled: Boolean) = saveTuned(context, "neutralise_vendor_fx", enabled)
+    /** How DiPlay treats the head unit's own session-0 effects: off (leave them), neutral (hold flat), direct (the phone drives them). */
+    fun loadUnitFxMode(context: Context): VendorEffects.Mode {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stored = prefs.getString("unit_fx_mode", null)
+        if (stored != null) return VendorEffects.Mode.of(stored)
+        // 24.44 stored only the neutralise switch.
+        return if (prefs.getBoolean("neutralise_vendor_fx", false)) VendorEffects.Mode.NEUTRAL else VendorEffects.Mode.OFF
+    }
+    fun saveUnitFxMode(context: Context, mode: VendorEffects.Mode) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("unit_fx_mode", mode.key).putBoolean("neutralise_vendor_fx", mode != VendorEffects.Mode.OFF).apply()
+    }
+    /** The direct-mode target (VendorEffects.Target JSON), set from the phone. */
+    fun loadUnitFxTarget(context: Context): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("unit_fx_target", null)
+    fun saveUnitFxTarget(context: Context, json: String) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("unit_fx_target", json).apply()
+    /** Compatibility wrappers for the head unit's own switch: on = neutral (or direct, if the phone chose that), off = leave alone. */
+    fun loadNeutraliseVendorEffects(context: Context): Boolean = loadUnitFxMode(context) != VendorEffects.Mode.OFF
+    fun saveNeutraliseVendorEffects(context: Context, enabled: Boolean) = saveUnitFxMode(context, if (enabled) VendorEffects.Mode.NEUTRAL else VendorEffects.Mode.OFF)
     fun loadSoftClipMedia(context: Context): Boolean = tuned(context, "soft_clip_media")
     fun saveSoftClipMedia(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("soft_clip_media", enabled).apply()

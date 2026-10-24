@@ -875,6 +875,15 @@ class DiPlayActivity : ComponentActivity() {
                 toast("Float output at the hardware rate, firmware enhancements off at the next session"); render()
             }, LinearLayout.LayoutParams(0, dp(56), 1f))
             card.addView(pathRow)
+            // Android refuses a volume change from an app while the unit is muted (ringer silent counts
+            // as Do Not Disturb) unless the app may change Do Not Disturb; the phone app needs that.
+            val policyGranted = runCatching { getSystemService(android.app.NotificationManager::class.java)?.isNotificationPolicyAccessGranted }.getOrNull() == true
+            card.addView(label("Volume from the iPhone app", 16, TEXT, true).apply { setPadding(0, dp(14), 0, dp(2)) })
+            card.addView(button(if (policyGranted) "Do Not Disturb access: granted ✓" else "Allow Do Not Disturb access (volume while muted)", false) {
+                val opened = runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+                if (!opened) toast("This unit has no Do Not Disturb access screen; the phone app falls back to DiPlay's own volume")
+            }, matchButton(6, 56))
+            card.addView(label("Without it Android answers \"Not allowed to change Do Not Disturb state\" when the unit is muted, and the phone app uses DiPlay's own digital volume instead. Find DiPlay in the list that opens and allow it.", 13, MUTED).apply { setPadding(0, dp(6), 0, dp(4)) })
             val cleanMax = runCatching { getSystemService(AudioManager::class.java)?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull()?.takeIf { it > 0 } ?: 30
             toggle(card, "Clean volume mode", "For units that distort on every volume step but one. During a CarPlay or iPod session the head unit is parked at its clean step and the knob drives DiPlay's own digital volume instead (float, no distortion at any level); the level shows on screen. When the session ends the unit gets its real volume back. Needs the knob to be Android's software volume.", CleanVolume.enabled(this)) {
                 CleanVolume.saveEnabled(this, it)

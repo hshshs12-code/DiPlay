@@ -10,6 +10,7 @@
 		2184B62B0D0FCD0E919488A4 /* AccessoryLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C2CD236A57F75F937B6B9D /* AccessoryLink.swift */; };
 		2573C33029DCA70B859711F7 /* SoundStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 971E7B4A456B0F8C9690205A /* SoundStore.swift */; };
 		4715B5B27DB5DA37A36A2945 /* SoundModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E94B90ADE98FF5A21A902B5 /* SoundModel.swift */; };
+		62222B99DB596F844880E9B2 /* VolumeButtons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E9E91B292282049ED36AC8E /* VolumeButtons.swift */; };
 		83AD5D27442B0B1368039052 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6C0E768595B7B107A23CE94 /* ContentView.swift */; };
 		84FC3798851A7DEAB42C6EBA /* Controls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7275655D1A42FCBC042CF094 /* Controls.swift */; };
 		E1F7526BB01F4BB01719E6B3 /* DiPlaySoundApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9548BF76FD71E0367F12E9CB /* DiPlaySoundApp.swift */; };
@@ -18,6 +19,7 @@
 /* Begin PBXFileReference section */
 		7275655D1A42FCBC042CF094 /* Controls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Controls.swift; sourceTree = "<group>"; };
 		8E94B90ADE98FF5A21A902B5 /* SoundModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundModel.swift; sourceTree = "<group>"; };
+		8E9E91B292282049ED36AC8E /* VolumeButtons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeButtons.swift; sourceTree = "<group>"; };
 		9548BF76FD71E0367F12E9CB /* DiPlaySoundApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiPlaySoundApp.swift; sourceTree = "<group>"; };
 		971E7B4A456B0F8C9690205A /* SoundStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundStore.swift; sourceTree = "<group>"; };
 		D6C2CD236A57F75F937B6B9D /* AccessoryLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessoryLink.swift; sourceTree = "<group>"; };
@@ -43,6 +45,7 @@
 				9548BF76FD71E0367F12E9CB /* DiPlaySoundApp.swift */,
 				8E94B90ADE98FF5A21A902B5 /* SoundModel.swift */,
 				971E7B4A456B0F8C9690205A /* SoundStore.swift */,
+				8E9E91B292282049ED36AC8E /* VolumeButtons.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -119,6 +122,7 @@
 				E1F7526BB01F4BB01719E6B3 /* DiPlaySoundApp.swift in Sources */,
 				4715B5B27DB5DA37A36A2945 /* SoundModel.swift in Sources */,
 				2573C33029DCA70B859711F7 /* SoundStore.swift in Sources */,
+				62222B99DB596F844880E9B2 /* VolumeButtons.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

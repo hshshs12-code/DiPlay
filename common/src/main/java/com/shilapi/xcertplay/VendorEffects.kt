@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Legacy fork: the head unit's own global sound effects (audio session 0), read and neutralised.
+// Legacy fork: the head unit's own global sound effects (audio session 0): read, held flat, or driven directly.
 package com.shilapi.xcertplay
 
 import android.content.Context
@@ -9,26 +9,75 @@ import android.media.audiofx.Equalizer
 import android.media.audiofx.PresetReverb
 import android.media.audiofx.Virtualizer
 import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * The vendor's "Sound Effects" app (com.xy.tda7729 on the 9212A family) applies an LVM equalizer,
  * bass boost, virtualizer and preset reverb on the global output mix (audio session 0) under the
  * package name com.android.systemui, with up to ±15 dB per band. They sit after every app's
  * output and before the HAL, so they shape DiPlay's sound too. Any app holding
- * MODIFY_AUDIO_SETTINGS can open the same effect instances: this reads them and, when the user
- * asks, takes control with a higher priority and sets them flat and disabled for as long as
- * DiPlay runs. The vendor app's own stored settings are never touched; switching off hands the
- * engines back with the values they had.
+ * MODIFY_AUDIO_SETTINGS can open the same effect instances. DiPlay can read them, hold them flat
+ * ([Mode.NEUTRAL]) or drive them with the user's own values ([Mode.DIRECT], from the iPhone app)
+ * by taking control at a higher priority for as long as it runs. The vendor app's stored settings
+ * are never touched; releasing control hands the engines back with the values they had.
  */
 object VendorEffects {
     private const val TAG = "DiPlay-VendorFx"
     private const val SESSION = 0
     /** Below normal: reading never takes control away from the vendor app. */
     private const val PRIORITY_READ = -1
-    /** Above normal: neutralising does take control, and keeps it while the handles live. */
+    /** Above normal: controlling does take control, and keeps it while the handles live. */
     private const val PRIORITY_CONTROL = 100
 
+    enum class Mode(val key: String) {
+        OFF("off"), NEUTRAL("neutral"), DIRECT("direct");
+
+        companion object {
+            fun of(key: String?): Mode = values().firstOrNull { it.key == key } ?: OFF
+        }
+    }
+
     data class Band(val centreHz: Int, val levelMb: Int)
+
+    /** What to set the four engines to; [bandsMb] shorter than the equalizer leaves the rest alone. */
+    data class Target(
+        val eqEnabled: Boolean = false, val bandsMb: List<Int> = emptyList(),
+        val bassEnabled: Boolean = false, val bassStrength: Int = 0,
+        val virtEnabled: Boolean = false, val virtStrength: Int = 0,
+        val reverbEnabled: Boolean = false, val reverbPreset: Int = 0,
+    ) {
+        fun toJson(): JSONObject = JSONObject()
+            .put("eqEnabled", eqEnabled).put("bandsMb", JSONArray(bandsMb))
+            .put("bassEnabled", bassEnabled).put("bassStrength", bassStrength)
+            .put("virtEnabled", virtEnabled).put("virtStrength", virtStrength)
+            .put("reverbEnabled", reverbEnabled).put("reverbPreset", reverbPreset)
+
+        /** This target with every key present in [json] replaced, clamped to the engines' ranges. */
+        fun merge(json: JSONObject): Target {
+            fun bool(key: String, current: Boolean) = if (json.has(key) && !json.isNull(key)) json.optBoolean(key, current) else current
+            fun int(key: String, current: Int, min: Int, max: Int) = if (json.has(key) && !json.isNull(key)) json.optInt(key, current).coerceIn(min, max) else current
+            val bands = json.optJSONArray("bandsMb")?.let { array -> List(array.length()) { array.optInt(it, 0).coerceIn(-3000, 3000) } } ?: bandsMb
+            return Target(
+                eqEnabled = bool("eqEnabled", eqEnabled), bandsMb = bands,
+                bassEnabled = bool("bassEnabled", bassEnabled), bassStrength = int("bassStrength", bassStrength, 0, 1000),
+                virtEnabled = bool("virtEnabled", virtEnabled), virtStrength = int("virtStrength", virtStrength, 0, 1000),
+                reverbEnabled = bool("reverbEnabled", reverbEnabled), reverbPreset = int("reverbPreset", reverbPreset, 0, 6),
+            )
+        }
+
+        companion object {
+            val FLAT = Target()
+            fun fromJson(text: String?): Target? = text?.let { runCatching { FLAT.merge(JSONObject(it)) }.getOrNull() }
+            /** The engines as they are now, so switching to direct control changes nothing until a slider moves. */
+            fun from(snapshot: Snapshot): Target = Target(
+                eqEnabled = snapshot.eqEnabled, bandsMb = snapshot.bands.map { it.levelMb },
+                bassEnabled = snapshot.bassEnabled, bassStrength = snapshot.bassStrength,
+                virtEnabled = snapshot.virtEnabled, virtStrength = snapshot.virtStrength,
+                reverbEnabled = snapshot.reverbEnabled, reverbPreset = snapshot.reverbPreset,
+            )
+        }
+    }
 
     data class Snapshot(
         val eqAvailable: Boolean, val eqEnabled: Boolean, val bands: List<Band>, val rangeMb: IntRange, val eqPreset: String,
@@ -56,6 +105,16 @@ object VendorEffects {
             return parts.joinToString("   ·   ")
         }
 
+        /** The phone's view of the engines, plus the mode DiPlay runs them in. */
+        fun toJson(mode: Mode, controlled: Boolean): JSONObject = JSONObject()
+            .put("mode", mode.key).put("controlled", controlled).put("available", available).put("text", describe())
+            .put("eq", JSONObject().put("available", eqAvailable).put("enabled", eqEnabled)
+                .put("hz", JSONArray(bands.map { it.centreHz })).put("mb", JSONArray(bands.map { it.levelMb }))
+                .put("minMb", rangeMb.first).put("maxMb", rangeMb.last).put("preset", eqPreset))
+            .put("bass", JSONObject().put("available", bassAvailable).put("enabled", bassEnabled).put("strength", bassStrength))
+            .put("virt", JSONObject().put("available", virtAvailable).put("enabled", virtEnabled).put("strength", virtStrength))
+            .put("reverb", JSONObject().put("available", reverbAvailable).put("enabled", reverbEnabled).put("preset", reverbPreset))
+
         private fun hz(v: Int) = if (v >= 1000) String.format(java.util.Locale.US, "%.1f kHz", v / 1000.0).replace(".0 kHz", " kHz") else "$v Hz"
         private fun db(mb: Int) = String.format(java.util.Locale.US, "%+.1f dB", mb / 100.0)
     }
@@ -64,14 +123,16 @@ object VendorEffects {
     private var before: Snapshot? = null
 
     /** Reads the current state of the global effects without taking control. Blocking binder calls; call off the main thread. */
-    fun read(): Snapshot = synchronized(this) {
+    fun read(): Snapshot = synchronized(this) { readLocked() }
+
+    private fun readLocked(): Snapshot {
         val errors = ArrayList<String>()
         var eqAvailable = false; var eqEnabled = false; val bands = ArrayList<Band>(); var range = 0..0; var preset = ""
         var bassAvailable = false; var bassEnabled = false; var bassStrength = 0
         var virtAvailable = false; var virtEnabled = false; var virtStrength = 0
         var reverbAvailable = false; var reverbEnabled = false; var reverbPreset = 0
-        // When DiPlay already holds the engines (neutralised), read through those handles: a second
-        // instance with lower priority would describe the same engine anyway.
+        // When DiPlay already holds the engines, read through those handles: a second instance
+        // with lower priority would describe the same engine anyway.
         val eqHeld = held.filterIsInstance<Equalizer>().firstOrNull()
         val bassHeld = held.filterIsInstance<BassBoost>().firstOrNull()
         val virtHeld = held.filterIsInstance<Virtualizer>().firstOrNull()
@@ -91,69 +152,86 @@ object VendorEffects {
         use({ reverbHeld ?: PresetReverb(PRIORITY_READ, SESSION) }, reverbHeld == null, errors, "reverb") { rv ->
             reverbAvailable = true; reverbEnabled = rv.enabled; reverbPreset = rv.preset.toInt()
         }
-        Snapshot(eqAvailable, eqEnabled, bands, range, preset, bassAvailable, bassEnabled, bassStrength,
+        return Snapshot(eqAvailable, eqEnabled, bands, range, preset, bassAvailable, bassEnabled, bassStrength,
             virtAvailable, virtEnabled, virtStrength, reverbAvailable, reverbEnabled, reverbPreset, errors)
     }
 
-    /** Whether DiPlay currently holds the engines flat. */
-    val neutralising: Boolean get() = synchronized(this) { held.isNotEmpty() }
+    /** Whether DiPlay currently holds the engines (flat or driven). */
+    val controlling: Boolean get() = synchronized(this) { held.isNotEmpty() }
+    val neutralising: Boolean get() = controlling
 
-    /** Applies the saved preference at session start (idempotent). */
+    /** Applies the saved mode at session start (idempotent). */
     fun applyIfEnabled(context: Context, log: (String) -> Unit) {
-        if (!AirPlayPersistence.loadNeutraliseVendorEffects(context)) return
-        runCatching { neutralise(true, log) }.onFailure { log("vendor effects: neutralise failed: ${it.message}") }
+        val app = context.applicationContext
+        when (AirPlayPersistence.loadUnitFxMode(app)) {
+            Mode.OFF -> Unit
+            Mode.NEUTRAL -> runCatching { control(Target.FLAT, log) }.onFailure { log("vendor effects: neutralise failed: ${it.message}") }
+            Mode.DIRECT -> runCatching {
+                val target = Target.fromJson(AirPlayPersistence.loadUnitFxTarget(app)) ?: Target.from(read()).also { AirPlayPersistence.saveUnitFxTarget(app, it.toJson().toString()) }
+                control(target, log)
+            }.onFailure { log("vendor effects: direct control failed: ${it.message}") }
+        }
     }
 
+    /** Backwards-compatible: on = hold flat, off = hand back. */
+    fun neutralise(on: Boolean, log: (String) -> Unit): Snapshot = if (on) control(Target.FLAT, log) else release(log)
+
     /**
-     * [on]: take control of the four global effects and set them flat and disabled; the handles
-     * stay open (control is lost the moment they are released). Off: put back what was there and
-     * release. Returns the state afterwards. Blocking; call off the main thread.
+     * Takes control of the four global effects (keeping what they had for [release]) and sets
+     * them to [target]. The handles stay open: control is lost the moment they are released.
+     * Returns the state afterwards. Blocking; call off the main thread.
      */
-    fun neutralise(on: Boolean, log: (String) -> Unit): Snapshot = synchronized(this) {
-        if (on) {
-            if (held.isNotEmpty()) return read()
-            val previous = read()
+    fun control(target: Target, log: (String) -> Unit): Snapshot = synchronized(this) {
+        val results = ArrayList<String>()
+        if (held.isEmpty()) {
+            val previous = readLocked()
             before = previous
-            val results = ArrayList<String>()
-            runCatching { Equalizer(PRIORITY_CONTROL, SESSION) }.onSuccess { eq ->
-                held += eq
-                results += "eq control=${eq.hasControl()}"
-                runCatching { for (b in 0 until eq.numberOfBands) eq.setBandLevel(b.toShort(), 0) }.onFailure { results += "eq flat: ${it.message}" }
-                results += "eq off=${eq.setEnabled(false)}"
-            }.onFailure { results += "eq: ${it.message}" }
-            runCatching { BassBoost(PRIORITY_CONTROL, SESSION) }.onSuccess { bb ->
-                held += bb
-                runCatching { bb.setStrength(0) }
-                results += "bass control=${bb.hasControl()} off=${bb.setEnabled(false)}"
-            }.onFailure { results += "bass: ${it.message}" }
-            runCatching { Virtualizer(PRIORITY_CONTROL, SESSION) }.onSuccess { vt ->
-                held += vt
-                runCatching { vt.setStrength(0) }
-                results += "virt control=${vt.hasControl()} off=${vt.setEnabled(false)}"
-            }.onFailure { results += "virt: ${it.message}" }
-            runCatching { PresetReverb(PRIORITY_CONTROL, SESSION) }.onSuccess { rv ->
-                held += rv
-                runCatching { rv.preset = PresetReverb.PRESET_NONE }
-                results += "reverb control=${rv.hasControl()} off=${rv.setEnabled(false)}"
-            }.onFailure { results += "reverb: ${it.message}" }
-            log("vendor effects: neutralised (${results.joinToString(", ")}); before: ${previous.describe()}")
-        } else {
-            if (held.isEmpty()) return read()
-            val previous = before
-            if (previous != null) {
-                held.filterIsInstance<Equalizer>().forEach { eq ->
-                    runCatching { previous.bands.forEachIndexed { i, band -> eq.setBandLevel(i.toShort(), band.levelMb.toShort()) } }
-                    runCatching { eq.setEnabled(previous.eqEnabled) }
-                }
-                held.filterIsInstance<BassBoost>().forEach { bb -> runCatching { bb.setStrength(previous.bassStrength.toShort()); bb.setEnabled(previous.bassEnabled) } }
-                held.filterIsInstance<Virtualizer>().forEach { vt -> runCatching { vt.setStrength(previous.virtStrength.toShort()); vt.setEnabled(previous.virtEnabled) } }
-                held.filterIsInstance<PresetReverb>().forEach { rv -> runCatching { rv.preset = previous.reverbPreset.toShort(); rv.setEnabled(previous.reverbEnabled) } }
-            }
-            held.forEach { runCatching { it.release() } }
-            held.clear(); before = null
-            log("vendor effects: handed back" + (previous?.let { " (${it.describe()})" } ?: ""))
+            runCatching { Equalizer(PRIORITY_CONTROL, SESSION) }.onSuccess { held += it; results += "eq control=${it.hasControl()}" }.onFailure { results += "eq: ${it.message}" }
+            runCatching { BassBoost(PRIORITY_CONTROL, SESSION) }.onSuccess { held += it; results += "bass control=${it.hasControl()}" }.onFailure { results += "bass: ${it.message}" }
+            runCatching { Virtualizer(PRIORITY_CONTROL, SESSION) }.onSuccess { held += it; results += "virt control=${it.hasControl()}" }.onFailure { results += "virt: ${it.message}" }
+            runCatching { PresetReverb(PRIORITY_CONTROL, SESSION) }.onSuccess { held += it; results += "reverb control=${it.hasControl()}" }.onFailure { results += "reverb: ${it.message}" }
+            log("vendor effects: took control (${results.joinToString(", ")}); before: ${previous.describe()}")
         }
-        read()
+        applyLocked(target, results)
+        log("vendor effects: set ${if (target == Target.FLAT) "flat/off" else target.toJson()} → ${results.joinToString(", ")}")
+        readLocked()
+    }
+
+    private fun applyLocked(target: Target, results: MutableList<String>) {
+        held.filterIsInstance<Equalizer>().forEach { eq ->
+            runCatching {
+                val bands = eq.numberOfBands.toInt()
+                val r = eq.bandLevelRange
+                for (b in 0 until bands) {
+                    val level = target.bandsMb.getOrNull(b) ?: if (target == Target.FLAT) 0 else continue
+                    eq.setBandLevel(b.toShort(), level.coerceIn(r[0].toInt(), r[1].toInt()).toShort())
+                }
+            }.onFailure { results += "eq bands: ${it.message}" }
+            results += "eq ${if (target.eqEnabled) "on" else "off"}=${eq.setEnabled(target.eqEnabled)}"
+        }
+        held.filterIsInstance<BassBoost>().forEach { bb ->
+            runCatching { bb.setStrength(target.bassStrength.coerceIn(0, 1000).toShort()) }.onFailure { results += "bass strength: ${it.message}" }
+            results += "bass=${bb.setEnabled(target.bassEnabled)}"
+        }
+        held.filterIsInstance<Virtualizer>().forEach { vt ->
+            runCatching { vt.setStrength(target.virtStrength.coerceIn(0, 1000).toShort()) }.onFailure { results += "virt strength: ${it.message}" }
+            results += "virt=${vt.setEnabled(target.virtEnabled)}"
+        }
+        held.filterIsInstance<PresetReverb>().forEach { rv ->
+            runCatching { rv.preset = target.reverbPreset.coerceIn(0, 6).toShort() }.onFailure { results += "reverb preset: ${it.message}" }
+            results += "reverb=${rv.setEnabled(target.reverbEnabled)}"
+        }
+    }
+
+    /** Puts back what the engines had when control was taken, then releases the handles. */
+    fun release(log: (String) -> Unit): Snapshot = synchronized(this) {
+        if (held.isEmpty()) return readLocked()
+        val previous = before
+        if (previous != null) applyLocked(Target.from(previous), ArrayList())
+        held.forEach { runCatching { it.release() } }
+        held.clear(); before = null
+        log("vendor effects: handed back" + (previous?.let { " (${it.describe()})" } ?: ""))
+        readLocked()
     }
 
     private inline fun <T : AudioEffect> use(create: () -> T, releaseAfter: Boolean, errors: MutableList<String>, name: String, block: (T) -> Unit) {

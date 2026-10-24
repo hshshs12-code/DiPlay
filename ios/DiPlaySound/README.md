@@ -11,6 +11,13 @@ identifies to the iPhone as an MFi accessory and offers the External Accessory p
 No Wi-Fi, no Bluetooth, no pairing: plug in, start iPod audio on the unit, open the app.
 CarPlay mode is not covered yet.
 
+The Unit EQ tab drives the head unit's own effects directly (its 5-band equalizer, bass boost,
+virtualizer, reverb); turning it on parks DiPlay's processing. The Unit tab can also make the
+phone's volume buttons step the head unit's volume; iOS has no button API, so the app watches the
+system volume and keeps the phone's own level one step below full. If the unit is muted, Android
+refuses app volume changes until DiPlay is given Do Not Disturb access (DiPlay Settings → Audio
+path); until then the phone moves DiPlay's own level instead.
+
 ## Build and install (needs a Mac with Xcode)
 
 1. `brew install xcodegen` (once), then in this folder: `xcodegen generate`.
@@ -36,7 +43,9 @@ One JSON object per line. The unit answers every change with a full `state`.
 | `{"t":"preset","name":…}` | applies a built-in or user preset |
 | `{"t":"eqPreset","name":…}` | applies an equalizer curve (bands only) |
 | `{"t":"savePreset","name":…}` / `{"t":"deletePreset","name":…}` | stores or removes a user preset on the unit |
-| `{"t":"neutralise","on":true}` | holds the unit's own session-0 effects flat |
-| `{"t":"volume","index":n}` | sets Android's media volume |
+| `{"t":"unitFxMode","mode":"off"|"neutral"|"direct"}` | leave the unit's own session-0 effects, hold them flat, or drive them (direct parks DiPlay's processing) |
+| `{"t":"unitFxSet","eqEnabled":…,"bandsMb":[…],"bassEnabled":…,"bassStrength":…,"virtEnabled":…,"virtStrength":…,"reverbEnabled":…,"reverbPreset":…}` | sets the unit's engines (direct mode) |
+| `{"t":"volume","index":n}` / `{"t":"volume","delta":±1}` | Android media volume; un-mutes first with Do Not Disturb access, falls back to DiPlay's digital volume |
+| `{"t":"digitalVolume","percent":n}` | DiPlay's own level in iPod mode |
 
-`state` = `{t, v, unit, s: settings, meta: ranges and choice lists, userPresets: [names], volume: {index,max}, unitFx: {text, neutralised, enabled}}`.
+`state` = `{t, v, unit, s: settings, meta: ranges and choice lists, userPresets: [names], volume: {index, max, dndAccess, muted, digital, note}, unitFx: {mode, controlled, available, text, eq: {available, enabled, hz, mb, minMb, maxMb}, bass/virt/reverb: {available, enabled, strength|preset}}}`.

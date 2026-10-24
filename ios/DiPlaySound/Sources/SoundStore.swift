@@ -17,10 +17,18 @@ final class SoundStore: ObservableObject {
     @Published var lastError: String?
     @Published var lastMessageAt: Date?
 
+    /// Phone volume buttons step the head unit's volume while connected (Unit tab switch).
+    @Published var volumeButtons: Bool = UserDefaults.standard.bool(forKey: "volumeButtons") {
+        didSet { UserDefaults.standard.set(volumeButtons, forKey: "volumeButtons"); updateVolumeWatcher() }
+    }
+
     let link = AccessoryLink()
+    let buttons = VolumeButtonWatcher()
 
     private var sendWork: DispatchWorkItem?
+    private var unitFxWork: DispatchWorkItem?
     private var suppressIncomingUntil = Date.distantPast
+    private var suppressUnitFxUntil = Date.distantPast
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -32,9 +40,51 @@ final class SoundStore: ObservableObject {
             .sink { [weak self] connected in
                 guard let self = self else { return }
                 if connected { self.hello() } else { self.hasState = false }
+                self.updateVolumeWatcher()
             }
             .store(in: &cancellables)
+        buttons.onStep = { [weak self] step in self?.adjustVolume(step) }
+        buttons.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         link.start()
+        updateVolumeWatcher()
+    }
+
+    private func updateVolumeWatcher() {
+        if volumeButtons && link.connected { buttons.start() } else { buttons.stop() }
+    }
+
+    // MARK: head-unit volume
+
+    func adjustVolume(_ delta: Int) {
+        link.send(["t": "volume", "delta": delta])
+    }
+
+    func setDigitalVolume(_ percent: Int) {
+        volume.digital = percent
+        link.send(["t": "digitalVolume", "percent": percent])
+    }
+
+    // MARK: the head unit's own effects
+
+    func setUnitFxMode(_ mode: String) {
+        unitFx.mode = mode
+        link.send(["t": "unitFxMode", "mode": mode])
+    }
+
+    /// Edits the unit's own engines (direct mode): applied here at once, sent after a short pause.
+    func editUnitFx(_ change: (inout UnitFx) -> Void) {
+        change(&unitFx)
+        unitFxWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.unitFxWork = nil
+            self.suppressUnitFxUntil = Date().addingTimeInterval(0.8)
+            var message: [String: Any] = ["t": "unitFxSet"]
+            for (key, value) in self.unitFx.targetJson { message[key] = value }
+            self.link.send(message)
+        }
+        unitFxWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
     var connected: Bool { link.connected }
@@ -71,11 +121,6 @@ final class SoundStore: ObservableObject {
     func deletePreset(_ name: String) {
         userPresets.removeAll { $0 == name }
         link.send(["t": "deletePreset", "name": name])
-    }
-
-    func setNeutralise(_ on: Bool) {
-        unitFx.enabled = on
-        link.send(["t": "neutralise", "on": on])
     }
 
     func setVolume(_ index: Int) {
@@ -115,10 +160,8 @@ final class SoundStore: ObservableObject {
             }
             if let m = object["meta"] as? [String: Any] { meta = Meta(json: m) }
             userPresets = object["userPresets"] as? [String] ?? []
-            if let v = object["volume"] as? [String: Any] { volume = VolumeInfo(index: v.int("index", -1), max: v.int("max", 0)) }
-            if let u = object["unitFx"] as? [String: Any] {
-                unitFx = UnitFx(text: u["text"] as? String ?? "", neutralised: u.bool("neutralised", false), enabled: u.bool("enabled", false))
-            }
+            if let v = object["volume"] as? [String: Any] { volume = VolumeInfo(json: v) }
+            if let u = object["unitFx"] as? [String: Any], Date() >= suppressUnitFxUntil || !hasState { unitFx = UnitFx(json: u) }
             unitName = object["unit"] as? String ?? ""
             hasState = true
         case "error":

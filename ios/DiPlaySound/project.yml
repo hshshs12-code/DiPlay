@@ -25,6 +25,7 @@ targets:
           - com.shilapi.xcertplay
         UIBackgroundModes:
           - external-accessory
+          - audio
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:

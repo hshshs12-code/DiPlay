@@ -165,15 +165,18 @@ class EqualizerPanel(
         body.addView(unitFx, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         val main = Handler(Looper.getMainLooper())
         fun showUnitFx(snapshot: VendorEffects.Snapshot) {
-            val held = if (VendorEffects.neutralising) "   ·   held flat by DiPlay" else ""
+            val held = when {
+                !VendorEffects.controlling -> ""
+                com.shilapi.xcertplay.UnitFxControl.mode(context) == VendorEffects.Mode.DIRECT -> "   ·   driven from the iPhone app (DiPlay's own processing is parked)"
+                else -> "   ·   held flat by DiPlay"
+            }
             unitFx.text = "Head-unit effects: ${snapshot.describe()}$held"
         }
         body.addView(switchFactory("Neutralise head-unit effects", AirPlayPersistence.loadNeutraliseVendorEffects(context),
-            "Takes control of the unit's equalizer, bass boost, virtualizer and reverb on the global output and holds them flat and off while DiPlay runs (also at every session start). Off: hands them back with the values they had. The unit's own Sound Effects settings are not changed.") { on ->
-            AirPlayPersistence.saveNeutraliseVendorEffects(context, on)
+            "Takes control of the unit's equalizer, bass boost, virtualizer and reverb on the global output and holds them flat and off while DiPlay runs (also at every session start). Off: hands them back with the values they had. The unit's own Sound Effects settings are not changed. The iPhone app can instead drive them directly (Unit EQ).") { on ->
             unitFx.text = if (on) "Head-unit effects: taking control…" else "Head-unit effects: handing back…"
             Thread {
-                val snapshot = runCatching { VendorEffects.neutralise(on) { } }.getOrElse { VendorEffects.read() }
+                val snapshot = runCatching { com.shilapi.xcertplay.UnitFxControl.setMode(context, if (on) VendorEffects.Mode.NEUTRAL else VendorEffects.Mode.OFF) { } }.getOrElse { VendorEffects.read() }
                 main.post { showUnitFx(snapshot) }
             }.start()
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })

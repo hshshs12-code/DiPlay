@@ -39,7 +39,22 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.45)
+## Fork features (0.2.13-legacy24.46)
+
+24.46: unit effects driven from the phone, volume that survives mute, phone volume buttons
+- `VendorEffects` gains `Mode` (off / neutral / direct) and `Target`: direct mode drives the unit's
+  session-0 equalizer bands, bass boost, virtualizer and reverb with the phone's values;
+  `UnitFxControl` parks DiPlay's own processing while direct is on and restores it after.
+  `AirPlayPersistence` stores the mode and target (the 24.44 neutralise switch migrates).
+- `SoundControlBridge`: `unitFxMode`, `unitFxSet`, `volume {delta}`, `digitalVolume`; the volume
+  path un-mutes first when Do Not Disturb access is granted, falls back to stepping, then to
+  DiPlay's own iPod digital volume, and reports which in `volume.note`. Settings → Audio path
+  gains "Allow Do Not Disturb access" (Android refuses app volume changes while the unit is
+  muted without it).
+- iPhone app: Unit EQ tab (direct control switch, the unit's bands ±15 dB, bass boost,
+  virtualizer, reverb), mode picker on the Unit tab, phone volume buttons stepping the unit's
+  volume (`VolumeButtonWatcher`: system-volume observation with a reference one step below
+  full), DiPlay digital-level slider.
 
 24.45: iPhone companion app over the iPod-mode cable, user presets
 - iPod identification offers the External Accessory protocol `com.shilapi.xcertplay` (group 10,

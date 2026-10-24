@@ -153,12 +153,78 @@ struct Meta {
 struct VolumeInfo: Equatable {
     var index = -1
     var max = 0
+    var dndAccess = false
+    var muted = false
+    var digital = 100
+    var note = ""
+
+    init() {}
+    init(json j: [String: Any]) {
+        index = j.int("index", -1); max = j.int("max", 0); dndAccess = j.bool("dndAccess", false); muted = j.bool("muted", false)
+        digital = j.int("digital", 100); note = j["note"] as? String ?? ""
+    }
 }
 
-struct UnitFx: Equatable {
-    var text = ""
-    var neutralised = false
+/// One of the head unit's own session-0 engines, as the unit reports it.
+struct UnitEngine: Equatable {
+    var available = false
     var enabled = false
+    var strength = 0      // bass boost / virtualizer, 0–1000
+    var preset = 0        // reverb
+
+    init() {}
+    init(json j: [String: Any]) {
+        available = j.bool("available", false); enabled = j.bool("enabled", false); strength = j.int("strength", 0); preset = j.int("preset", 0)
+    }
+}
+
+struct UnitEq: Equatable {
+    var available = false
+    var enabled = false
+    var hz: [Int] = []
+    var mb: [Int] = []
+    var minMb = -1500
+    var maxMb = 1500
+    var preset = ""
+
+    init() {}
+    init(json j: [String: Any]) {
+        available = j.bool("available", false); enabled = j.bool("enabled", false); hz = j.ints("hz", []); mb = j.ints("mb", [])
+        minMb = j.int("minMb", -1500); maxMb = j.int("maxMb", 1500); preset = j["preset"] as? String ?? ""
+    }
+}
+
+/// The head unit's own effects: what they are set to, and whether DiPlay leaves them, holds them flat or drives them.
+struct UnitFx: Equatable {
+    static let modeOff = "off", modeNeutral = "neutral", modeDirect = "direct"
+    static let reverbNames = ["None", "Small room", "Medium room", "Large room", "Medium hall", "Large hall", "Plate"]
+
+    var mode = "off"
+    var controlled = false
+    var available = false
+    var text = ""
+    var eq = UnitEq()
+    var bass = UnitEngine()
+    var virt = UnitEngine()
+    var reverb = UnitEngine()
+
+    init() {}
+    init(json j: [String: Any]) {
+        mode = j["mode"] as? String ?? (j.bool("enabled", false) ? UnitFx.modeNeutral : UnitFx.modeOff)
+        controlled = j.bool("controlled", j.bool("neutralised", false)); available = j.bool("available", true); text = j["text"] as? String ?? ""
+        eq = UnitEq(json: j["eq"] as? [String: Any] ?? [:])
+        bass = UnitEngine(json: j["bass"] as? [String: Any] ?? [:])
+        virt = UnitEngine(json: j["virt"] as? [String: Any] ?? [:])
+        reverb = UnitEngine(json: j["reverb"] as? [String: Any] ?? [:])
+    }
+
+    var direct: Bool { mode == UnitFx.modeDirect }
+
+    /// The direct-mode target the phone sends, built from the current values.
+    var targetJson: [String: Any] {
+        ["eqEnabled": eq.enabled, "bandsMb": eq.mb, "bassEnabled": bass.enabled, "bassStrength": bass.strength,
+         "virtEnabled": virt.enabled, "virtStrength": virt.strength, "reverbEnabled": reverb.enabled, "reverbPreset": reverb.preset]
+    }
 }
 
 extension Dictionary where Key == String, Value == Any {

@@ -25,7 +25,9 @@ import java.util.concurrent.TimeUnit
  * companion app opens while the head unit runs in iPod mode.
  *
  * Phone → unit: `hello`, `get`, `ping`, `set {s: partial settings}`, `preset {name}`,
- * `eqPreset {name}`, `savePreset {name}`, `deletePreset {name}`, `neutralise {on}`, `volume {index}`.
+ * `eqPreset {name}`, `savePreset {name}`, `deletePreset {name}`, `unitFxMode {mode}`,
+ * `unitFxSet {eqEnabled, bandsMb, bassEnabled, bassStrength, virtEnabled, virtStrength, reverbEnabled, reverbPreset}`,
+ * `volume {index | delta}`, `digitalVolume {percent}` (and the 1.0 `neutralise {on}`).
  * Unit → phone: `state` (settings, metadata, user presets, media volume, head-unit effects),
  * `pong`, `error {message}`. Every change made on the head unit itself is pushed as a fresh
  * `state`, so the phone and the car screen always show the same thing.
@@ -121,22 +123,76 @@ class SoundControlBridge(context: Context, private val log: (String) -> Unit) {
                 if (current.presetName == name) AudioEffectSettings.save(app, current.copy(presetName = "")) else schedulePush()
                 log("phone app: deleted preset $name")
             }
-            "neutralise" -> {
+            "neutralise" -> {   // 1.0 phones: on = hold flat, off = leave alone
                 val on = json.optBoolean("on")
-                AirPlayPersistence.saveNeutraliseVendorEffects(app, on)
-                unitFx = runCatching { VendorEffects.neutralise(on, log) }.getOrNull()
+                unitFx = runCatching { UnitFxControl.setMode(app, if (on) VendorEffects.Mode.NEUTRAL else VendorEffects.Mode.OFF, log) }.getOrNull()
+                pushAll()
+            }
+            "unitFxMode" -> {
+                val mode = VendorEffects.Mode.of(json.optString("mode"))
+                unitFx = runCatching { UnitFxControl.setMode(app, mode, log) }.getOrElse { return error(identifier, "unit effects: ${it.message}") }
+                log("phone app: unit effects mode ${mode.key}")
+                pushAll()
+            }
+            "unitFxSet" -> {
+                val snapshot = runCatching { UnitFxControl.adjust(app, json, log) }.getOrElse { return error(identifier, "unit effects: ${it.message}") }
+                    ?: return error(identifier, "Turn on direct control of the head unit's effects first")
+                unitFx = snapshot
                 pushAll()
             }
             "volume" -> {
-                val manager = app.getSystemService(AudioManager::class.java) ?: return error(identifier, "no audio service")
-                val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val delta = json.optInt("delta", 0)
                 val index = json.optInt("index", -1)
-                if (index < 0) return error(identifier, "volume needs index")
-                runCatching { manager.setStreamVolume(AudioManager.STREAM_MUSIC, index.coerceIn(0, max), 0) }.onFailure { return error(identifier, "volume refused: ${it.message}") }
+                if (index < 0 && delta == 0) return error(identifier, "volume needs index or delta")
+                volumeNote = setUnitVolume(index, delta)
+                log("phone app: volume ${if (index >= 0) "index $index" else "delta $delta"} → $volumeNote")
+                pushAll()
+            }
+            "digitalVolume" -> {
+                val percent = json.optInt("percent", -1)
+                if (percent < 0) return error(identifier, "digitalVolume needs percent")
+                val value = percent.coerceIn(0, 100) / 100f
+                IpodAudioEngine.volume = value
+                IpodSettings.saveVolume(app, value)
                 pushAll()
             }
             else -> error(identifier, "unknown message type $type")
         }
+    }
+
+    @Volatile private var volumeNote: String = ""
+
+    /**
+     * Android's media volume, by absolute index or by steps. A muted unit (ringer silent) counts
+     * as Do Not Disturb, and Android then refuses the change unless DiPlay holds Do Not Disturb
+     * access; with that access the unit is un-muted first. When Android still refuses, the change
+     * goes to DiPlay's own digital volume for the iPod session instead, so the phone always does
+     * something audible.
+     */
+    private fun setUnitVolume(index: Int, delta: Int): String {
+        val manager = app.getSystemService(AudioManager::class.java) ?: return "no audio service"
+        val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val current = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val target = (if (index >= 0) index else current + delta).coerceIn(0, max)
+        val policy = runCatching { app.getSystemService(android.app.NotificationManager::class.java)?.isNotificationPolicyAccessGranted }.getOrNull() == true
+        val silent = runCatching { manager.ringerMode != AudioManager.RINGER_MODE_NORMAL }.getOrDefault(false)
+        if (silent && policy) runCatching { manager.ringerMode = AudioManager.RINGER_MODE_NORMAL }
+        val direct = runCatching { manager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0) }
+        if (direct.isSuccess) return "Android media volume $target of $max"
+        // Step by step sometimes passes where an absolute set does not (no ringer-mode change implied).
+        if (delta != 0) {
+            val stepped = runCatching { repeat(kotlin.math.abs(delta)) { manager.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (delta > 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0) } }
+            if (stepped.isSuccess) return "Android media volume ${manager.getStreamVolume(AudioManager.STREAM_MUSIC)} of $max"
+        }
+        val reason = direct.exceptionOrNull()?.message ?: "refused"
+        if (IpodAudioEngine.isRunning()) {
+            val step = 1f / max.coerceAtLeast(1)
+            val digital = (if (index >= 0) index * step else IpodAudioEngine.volume + delta * step).coerceIn(0f, 1f)
+            IpodAudioEngine.volume = digital
+            IpodSettings.saveVolume(app, digital)
+            return "Android refused ($reason${if (silent && !policy) "; the unit is muted and DiPlay lacks Do Not Disturb access" else ""}): set DiPlay's digital volume to ${(digital * 100).toInt()} %"
+        }
+        return "Android refused: $reason"
     }
 
     private fun error(identifier: Int, message: String) {
@@ -170,10 +226,13 @@ class SoundControlBridge(context: Context, private val log: (String) -> Unit) {
             .put("userPresets", JSONArray(UserPresets.load(app).map { it.name }))
             .put("volume", JSONObject()
                 .put("index", runCatching { manager?.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull() ?: -1)
-                .put("max", runCatching { manager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull() ?: 0))
-            .put("unitFx", JSONObject()
-                .put("text", unitFx?.describe() ?: "not read yet")
-                .put("neutralised", VendorEffects.neutralising)
+                .put("max", runCatching { manager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull() ?: 0)
+                .put("dndAccess", runCatching { app.getSystemService(android.app.NotificationManager::class.java)?.isNotificationPolicyAccessGranted }.getOrNull() == true)
+                .put("muted", runCatching { manager?.ringerMode != AudioManager.RINGER_MODE_NORMAL }.getOrDefault(false))
+                .put("digital", (IpodAudioEngine.volume * 100).toInt())
+                .put("note", volumeNote))
+            .put("unitFx", (unitFx ?: VendorEffects.read().also { unitFx = it }).toJson(UnitFxControl.mode(app), VendorEffects.controlling)
+                .put("neutralised", VendorEffects.controlling)
                 .put("enabled", AirPlayPersistence.loadNeutraliseVendorEffects(app)))
         send(identifier, state)
     }
