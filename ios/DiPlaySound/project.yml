@@ -1,0 +1,37 @@
+name: DiPlaySound
+options:
+  bundleIdPrefix: com.shilapi
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+targets:
+  DiPlaySound:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: DiPlay Sound
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiresFullScreen: true
+        UISupportedExternalAccessoryProtocols:
+          - com.shilapi.xcertplay
+        UIBackgroundModes:
+          - external-accessory
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shilapi.diplaysound
+        PRODUCT_NAME: DiPlay Sound
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: false
+        ENABLE_PREVIEWS: true

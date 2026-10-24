@@ -218,7 +218,11 @@ data class AudioEffectSettings(
             cached = settings
             AudioEffectController.applyToActive(settings)
             EqualizerDsp.applyToActive(settings)
+            onSaved?.let { hook -> runCatching { hook(settings) } }
         }
+
+        /** Told after every [save]; the iPhone companion bridge mirrors the new state to the phone. */
+        @Volatile var onSaved: ((AudioEffectSettings) -> Unit)? = null
 
         /** The last loaded or saved settings; renderers use this without a context. */
         fun current(context: Context?): AudioEffectSettings =

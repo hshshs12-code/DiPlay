@@ -25,6 +25,7 @@ import com.shilapi.xcertplay.media.EqPresets
 import com.shilapi.xcertplay.media.EqualizerDsp
 import com.shilapi.xcertplay.media.ParametricBand
 import com.shilapi.xcertplay.media.SoundPresets
+import com.shilapi.xcertplay.media.UserPresets
 
 /**
  * The sound-processing UI shared by the main settings page and the in-CarPlay overlay, laid out
@@ -297,6 +298,51 @@ class EqualizerPanel(
             }
             val remainder = SoundPresets.YARIS.size % columns
             if (remainder != 0) repeat(columns - remainder) { row!!.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f).apply { rightMargin = dp(8) }) }
+
+            // Presets saved by the user, here or from the iPhone companion app: tap applies, hold deletes.
+            val user = UserPresets.load(context)
+            body.addView(heading("Your presets", if (user.isEmpty()) "Nothing saved yet. Save the current sound below, or from the iPhone app." else "Tap to apply, hold to delete. Saved on this unit."),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
+            var userRow: LinearLayout? = null
+            user.forEachIndexed { index, entry ->
+                if (index % columns == 0) { userRow = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }; body.addView(userRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }) }
+                val active = settings.presetName == entry.name
+                val tile = TextView(context).apply {
+                    text = entry.name + if (active) "  ✓" else ""
+                    textSize = 18f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER; maxLines = 2
+                    setTextColor(if (active) Color.rgb(12, 17, 27) else textColor)
+                    background = feedback(rounded(if (active) Color.WHITE else Color.argb(32, 255, 255, 255), if (active) Color.WHITE else Color.argb(60, 255, 255, 255)))
+                    setPadding(dp(12), dp(10), dp(12), dp(10)); isClickable = true; isFocusable = true; isSelected = active
+                    contentDescription = "Your preset ${entry.name}" + if (active) ", selected" else ""
+                    setOnClickListener { save(UserPresets.apply(entry, settings)); LoudnessVolumeTracker.refresh(context); rebuild() }
+                    setOnLongClickListener {
+                        AlertDialog.Builder(context).setTitle("Delete \"${entry.name}\"?").setMessage("The preset is removed from this unit; the current sound stays as it is.")
+                            .setNegativeButton("Keep", null)
+                            .setPositiveButton("Delete") { _, _ -> UserPresets.delete(context, entry.name); if (settings.presetName == entry.name) save(settings.copy(presetName = "")); rebuild() }
+                            .show()
+                        true
+                    }
+                }
+                userRow!!.addView(tile, LinearLayout.LayoutParams(0, dp(if (wide) 88 else 96), 1f).apply { if (index % columns != columns - 1) rightMargin = dp(8) })
+            }
+            val userRemainder = user.size % columns
+            if (user.isNotEmpty() && userRemainder != 0) repeat(columns - userRemainder) { userRow!!.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f).apply { rightMargin = dp(8) }) }
+            body.addView(buttonFactory("Save the current sound as a preset…") {
+                val input = android.widget.EditText(context).apply {
+                    hint = "Name"; setText(settings.presetName.takeIf { name -> UserPresets.find(context, name) != null } ?: "")
+                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                    setSingleLine(); setPadding(dp(16), dp(16), dp(16), dp(16))
+                }
+                AlertDialog.Builder(context).setTitle("Save preset").setMessage("Keeps every slider and switch as they are now (except the driver side and output trim, which follow the car).")
+                    .setView(input)
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Save") { _, _ ->
+                        val name = UserPresets.cleanName(input.text.toString()) ?: return@setPositiveButton
+                        UserPresets.save(context, name, settings)
+                        save(settings.copy(presetName = name)); rebuild()
+                    }
+                    .show()
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)).apply { topMargin = dp(12) })
         }
         body.addView(buttonFactory("More equalizer curves (bands only)…") {
             val names = EqPresets.ALL.map { it.name }

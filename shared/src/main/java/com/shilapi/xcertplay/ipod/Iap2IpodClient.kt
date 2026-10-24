@@ -10,12 +10,14 @@ import com.shilapi.xcertplay.media.CarPlayPlaybackStatus
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.mfi.MfiCertificateType
 import com.shilapi.xcertplay.transport.IphoneUsbException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 
 /**
  * The accessory side of an "iPod" USB session: identification, MFi authentication, then USB
- * device-mode audio, Now Playing updates, power updates and a media-remote HID component. The
- * caller owns [session]; [run] is its only receiver while active.
+ * device-mode audio, Now Playing updates, power updates, a media-remote HID component and the
+ * External Accessory protocol the iPhone companion app talks over. The caller owns [session];
+ * [run] is its only control-frame receiver while active.
  */
 class Iap2IpodClient(
     private val session: Iap2Session,
@@ -33,6 +35,10 @@ class Iap2IpodClient(
         /** Called right before StartUSBDeviceModeAudio is sent: select the audio alternate setting now. */
         fun onBeforeAudioRequest()
         fun onPower(state: IpodPowerState)
+        /** An iPhone app opened ([open]) or closed an External Accessory session for the companion protocol. */
+        fun onExternalAccessorySession(identifier: Int, open: Boolean) {}
+        /** One packet from the iPhone app on that session (link thread; return quickly). */
+        fun onExternalAccessoryData(identifier: Int, bytes: ByteArray) {}
     }
 
     private class Command(val frame: Iap2Frame, val pauseAfterMillis: Long = 0)
@@ -47,30 +53,44 @@ class Iap2IpodClient(
     @Volatile var repeat: Int? = null; private set
     /** Identification fallback level reached; 0 = everything offered. */
     @Volatile var level = 0; private set
+    /** Whether the current identification attempt offers the companion app's External Accessory protocol. */
+    @Volatile var externalAccessoryOffered = true; private set
+    /** Open External Accessory sessions: phone-assigned session identifier → protocol identifier. */
+    private val externalAccessorySessions = ConcurrentHashMap<Int, Int>()
     val capabilities: Iap2IpodMessages.Capabilities get() = Iap2IpodMessages.capabilities(level)
+    val externalAccessoryOpen: Boolean get() = externalAccessorySessions.isNotEmpty()
 
     /** Blocks until [isCancelled] or the link ends; throws on protocol failure. */
     fun run(isCancelled: () -> Boolean, linkTimeoutMillis: Long = LINK_TIMEOUT_MILLIS) {
         listener.onStage(Stage.LINKING)
+        session.onExternalAccessory = { identifier, bytes ->
+            if (externalAccessorySessions.containsKey(identifier)) listener.onExternalAccessoryData(identifier, bytes)
+        }
         if (!session.awaitReady(linkTimeoutMillis)) {
             throw IphoneUsbException.TimedOut("The iPhone did not open the iAP2 link over USB HID")
         }
         listener.onProgress("iap2 link ready over HID")
         listener.onStage(Stage.IDENTIFYING)
         val startedAt = System.nanoTime()
-        while (!isCancelled()) {
-            drainOutgoing()
-            val frame = session.recv(RECV_POLL_MILLIS)
-            if (frame == null) {
-                if (session.isClosed) throw IphoneUsbException.DeviceUnavailable("The iAP2 link closed")
-                if (!ready && (System.nanoTime() - startedAt) / 1_000_000 > SETUP_TIMEOUT_MILLIS) {
-                    throw IphoneUsbException.TimedOut(
-                        "The iPhone did not finish ${if (identified) "authentication" else "identification"} (unlock the phone and tap Trust/Allow if asked)",
-                    )
+        try {
+            while (!isCancelled()) {
+                drainOutgoing()
+                val frame = session.recv(RECV_POLL_MILLIS)
+                if (frame == null) {
+                    if (session.isClosed) throw IphoneUsbException.DeviceUnavailable("The iAP2 link closed")
+                    if (!ready && (System.nanoTime() - startedAt) / 1_000_000 > SETUP_TIMEOUT_MILLIS) {
+                        throw IphoneUsbException.TimedOut(
+                            "The iPhone did not finish ${if (identified) "authentication" else "identification"} (unlock the phone and tap Trust/Allow if asked)",
+                        )
+                    }
+                    continue
                 }
-                continue
+                handle(frame)
             }
-            handle(frame)
+        } finally {
+            val open = externalAccessorySessions.keys.toList()
+            externalAccessorySessions.clear()
+            open.forEach { runCatching { listener.onExternalAccessorySession(it, false) } }
         }
     }
 
@@ -95,6 +115,21 @@ class Iap2IpodClient(
         outgoing.add(Command(Iap2IpodMessages.startUsbDeviceModeAudio()))
     }
 
+    /**
+     * Sends [bytes] to the iPhone app on External Accessory session [identifier]. Thread-safe;
+     * false when that session is not open. Blocks only for link queue capacity.
+     */
+    fun sendExternalAccessory(identifier: Int, bytes: ByteArray): Boolean {
+        if (!externalAccessorySessions.containsKey(identifier)) return false
+        session.sendExternalAccessory(identifier, bytes, SEND_TIMEOUT_MILLIS)
+        return true
+    }
+
+    /** Asks the phone to close the app's session (StatusExternalAccessoryProtocolSession close). */
+    fun closeExternalAccessory(identifier: Int) {
+        if (externalAccessorySessions.containsKey(identifier)) outgoing.add(Command(Iap2IpodMessages.statusExternalAccessorySession(identifier, close = true)))
+    }
+
     private fun drainOutgoing() {
         while (true) {
             val command = outgoing.poll() ?: return
@@ -108,26 +143,35 @@ class Iap2IpodClient(
     private fun handle(frame: Iap2Frame) {
         when (frame.messageId) {
             Iap2IpodMessages.START_IDENTIFICATION -> {
-                listener.onProgress("iap2 rx 1d00 start-identification → sending accessory identity level=$level (${capabilities.describe()}) ${Iap2IpodMessages.describeLists(level)}")
-                send(Iap2IpodMessages.identificationInformation(config, level))
+                listener.onProgress("iap2 rx 1d00 start-identification → sending accessory identity level=$level (${capabilities.describe()}) ${Iap2IpodMessages.describeLists(level, externalAccessoryOffered)}")
+                send(Iap2IpodMessages.identificationInformation(config, level, externalAccessoryOffered))
             }
             Iap2IpodMessages.IDENTIFICATION_ACCEPTED -> {
                 identified = true
-                listener.onProgress("iap2 rx 1d02 identification accepted")
+                listener.onProgress("iap2 rx 1d02 identification accepted" + (if (externalAccessoryOffered) " (companion protocol ${config.externalAccessoryProtocol} offered)" else " (companion protocol withheld)"))
                 if (!authenticated) listener.onStage(Stage.AUTHENTICATING)
                 maybeReady()
             }
             Iap2IpodMessages.IDENTIFICATION_REJECTED -> {
                 // The rejection parameters can carry the offending message IDs; log their raw contents.
-                val ids = runCatching {
-                    Iap2BodyReader.of(frame).list().map { p -> "0x${p.id.toString(16)}(len=${p.payload.size}${if (p.payload.isNotEmpty()) " hex=" + p.payload.joinToString("") { "%02x".format(it.toInt() and 0xff) } else ""})" }
-                }.getOrDefault(emptyList())
+                val parameters = runCatching { Iap2BodyReader.of(frame).list() }.getOrDefault(emptyList())
+                val ids = parameters.map { p -> "0x${p.id.toString(16)}(len=${p.payload.size}${if (p.payload.isNotEmpty()) " hex=" + p.payload.joinToString("") { "%02x".format(it.toInt() and 0xff) } else ""})" }
+                // The companion protocol lives in parameter 10 and the message lists (6, 7). When the
+                // phone names one of those, try the same level without it before giving anything else up.
+                val couldBeExternalAccessory = parameters.isEmpty() || parameters.any { it.id == 10 || it.id == 6 || it.id == 7 }
+                if (externalAccessoryOffered && couldBeExternalAccessory && config.externalAccessoryProtocol.isNotBlank()) {
+                    externalAccessoryOffered = false
+                    listener.onProgress("iap2 rx 1d03 identification rejected parameters $ids → retrying level=$level without the companion External Accessory protocol")
+                    send(Iap2IpodMessages.identificationInformation(config, level, false))
+                    return
+                }
                 if (level >= Iap2IpodMessages.MAX_LEVEL) {
                     throw IphoneUsbException.Protocol("The iPhone rejected every accessory identification profile (last rejected parameters $ids)")
                 }
                 level++
-                listener.onProgress("iap2 rx 1d03 identification rejected parameters $ids → retrying with level=$level (${capabilities.describe()}) ${Iap2IpodMessages.describeLists(level)}")
-                send(Iap2IpodMessages.identificationInformation(config, level))
+                externalAccessoryOffered = true
+                listener.onProgress("iap2 rx 1d03 identification rejected parameters $ids → retrying with level=$level (${capabilities.describe()}) ${Iap2IpodMessages.describeLists(level, true)}")
+                send(Iap2IpodMessages.identificationInformation(config, level, true))
             }
             Iap2IpodMessages.REQUEST_AUTHENTICATION_CERTIFICATE -> {
                 val certificate = mfi.readCertificate()
@@ -166,6 +210,23 @@ class Iap2IpodClient(
                 val rate = Iap2IpodMessages.sampleRate(frame)
                 listener.onProgress("iap2 rx da01 usb-device-mode-audio sampleRate=${rate ?: "unknown"}")
                 if (rate != null) listener.onAudioSampleRate(rate)
+            }
+            Iap2IpodMessages.START_EXTERNAL_ACCESSORY_SESSION -> {
+                val reader = Iap2BodyReader.of(frame)
+                val protocolId = runCatching { reader.optionalU8(0) }.getOrNull()
+                val identifier = runCatching { reader.u16(1) }.getOrNull()
+                if (identifier == null) {
+                    listener.onProgress("iap2 rx ea00 start external accessory session without a session identifier; ignored")
+                } else {
+                    externalAccessorySessions[identifier] = protocolId ?: Iap2IpodMessages.EXTERNAL_ACCESSORY_PROTOCOL_ID
+                    listener.onProgress("iap2 rx ea00 iPhone app opened external accessory session=$identifier protocol=$protocolId")
+                    listener.onExternalAccessorySession(identifier, true)
+                }
+            }
+            Iap2IpodMessages.STOP_EXTERNAL_ACCESSORY_SESSION -> {
+                val identifier = runCatching { Iap2BodyReader.of(frame).u16(0) }.getOrNull()
+                listener.onProgress("iap2 rx ea01 iPhone app closed external accessory session=$identifier")
+                if (identifier != null && externalAccessorySessions.remove(identifier) != null) listener.onExternalAccessorySession(identifier, false)
             }
             Iap2IpodMessages.DEVICE_HID_REPORT -> Unit
             else -> listener.onProgress("iap2 rx 0x${frame.messageId.toString(16).padStart(4, '0')} bytes=${frame.payload.size}")

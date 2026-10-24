@@ -61,6 +61,21 @@ no USB-C Power Delivery on a USB-A host port, so 5 V × 1–2 A is the ceiling.
 The audio then passes through DiPlay's sound processor and the "audio path" output stage exactly
 like CarPlay music does.
 
+## iPhone companion app (24.45)
+
+`ios/DiPlaySound` is a SwiftUI app that controls the Sound screen from the phone while iPod audio
+runs: presets (built in and the user's own, saved on the unit), the 12 graphic bands, every stage
+switch and amount, the stereo stage, parametric bands, the head unit's own session-0 effects
+(neutralise) and Android's media volume. It rides the same cable: the iPod identification now
+offers the External Accessory protocol `com.shilapi.xcertplay` (parameter 10, message IDs
+0xEA00/0xEA01/0xEA03) and the link's EA session (id 11, type 2). iOS hands the app an `EASession`;
+`Iap2IpodClient` tracks the phone-assigned session identifiers, `Iap2LinkChannel` strips and adds
+the two-byte identifier prefix, and `SoundControlBridge` speaks newline-delimited JSON on top
+(see `ios/DiPlaySound/README.md` for the message table). If a phone rejects the identification
+with the EA group or message lists named, the same level is retried once without the protocol
+before the usual elimination ladder continues. The status pill shows "· iPhone app" while a
+session is open.
+
 ## Troubleshooting
 
 - **"The iPhone rejected the accessory identification"**: upload a diagnostic report; the log

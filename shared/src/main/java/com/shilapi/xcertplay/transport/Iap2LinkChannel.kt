@@ -42,6 +42,34 @@ class Iap2LinkChannel private constructor(
         isDaemon = true
     }
 
+    /**
+     * Receives one External Accessory Protocol packet (session type 2, link session 11) on the
+     * link thread: the two-byte EA protocol session identifier the phone assigned in
+     * StartExternalAccessoryProtocolSession, then that packet's data. Must not block.
+     */
+    @Volatile var onExternalAccessory: ((sessionIdentifier: Int, bytes: ByteArray) -> Unit)? = null
+
+    /**
+     * Queues one External Accessory packet for [sessionIdentifier], prefixing the identifier as the
+     * specification requires, waiting for command-queue capacity like [sendControlAwaitCapacity].
+     * [bytes] plus two must fit the peer's payload limit; callers chunk larger messages.
+     */
+    fun sendExternalAccessoryAwaitCapacity(sessionIdentifier: Int, bytes: ByteArray, timeoutMillis: Long): Boolean {
+        require(sessionIdentifier in 0..0xffff) { "EA session identifier must fit in u16" }
+        require(bytes.size + 2 <= Iap2LinkEngine.MAX_PAYLOAD_BYTES) { "EA payload exceeds ${Iap2LinkEngine.MAX_PAYLOAD_BYTES - 2} bytes" }
+        require(timeoutMillis >= 0) { "timeoutMillis must not be negative" }
+        val payload = ByteArray(bytes.size + 2)
+        payload[0] = (sessionIdentifier ushr 8).toByte()
+        payload[1] = sessionIdentifier.toByte()
+        System.arraycopy(bytes, 0, payload, 2, bytes.size)
+        synchronized(lock) {
+            waitFor(timeoutMillis) { terminated || closing || hasCommandCapacityLocked(payload.size) }
+            throwTerminalFailureLocked()
+            if (terminated || closing) return false
+            return enqueueCommandLocked(Iap2LinkEngine.EA_SESSION_ID, payload)
+        }
+    }
+
     /** Waits until session 10 is writable; returns false on timeout or clean close, and throws on failure. */
     fun awaitReady(timeoutMillis: Long): Boolean {
         require(timeoutMillis >= 0) { "timeoutMillis must not be negative" }
@@ -231,6 +259,18 @@ class Iap2LinkChannel private constructor(
                 }
 
                 is Iap2LinkEngine.Event.Session -> {
+                    if (event.sessionId == Iap2LinkEngine.EA_SESSION_ID) {
+                        val bytes = event.bytes
+                        if (bytes.size >= 2) {
+                            val identifier = ((bytes[0].toInt() and 0xff) shl 8) or (bytes[1].toInt() and 0xff)
+                            try {
+                                onExternalAccessory?.invoke(identifier, bytes.copyOfRange(2, bytes.size))
+                            } catch (_: Exception) {
+                                // A consumer callback cannot terminate the link.
+                            }
+                        }
+                        continue
+                    }
                     if (event.sessionId != Iap2LinkEngine.FILE_TRANSFER_SESSION_ID) continue
                     val outcome = fileTransfers.accept(event.bytes)
                     outcome.replies.forEach { reply ->

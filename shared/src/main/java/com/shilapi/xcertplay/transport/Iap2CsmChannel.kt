@@ -19,6 +19,7 @@ class Iap2CsmChannel private constructor(
 ) : AutoCloseable {
     private val stateLock = Object()
     private val sendLock = Object()
+    private val externalAccessorySendLock = Object()
     private val receiveLock = Object()
     private val framer = Iap2CsmFramer()
     private val receivedFrames = ArrayDeque<Iap2Frame>()
@@ -82,6 +83,44 @@ class Iap2CsmChannel private constructor(
                     failClosed(IOException("iAP2 could not queue the complete CSM frame before its timeout"))
                 }
             }
+        }
+    }
+
+    /** External Accessory packets from the phone, delivered on the link thread (see [Iap2LinkChannel.onExternalAccessory]). */
+    var onExternalAccessory: ((sessionIdentifier: Int, bytes: ByteArray) -> Unit)?
+        get() = link.onExternalAccessory
+        set(value) { link.onExternalAccessory = value }
+
+    /**
+     * Sends [bytes] on the External Accessory session [sessionIdentifier], split into packets that
+     * fit the peer's negotiated payload limit. Thread-safe and independent of control sends; the
+     * packets of one call stay in order.
+     */
+    fun sendExternalAccessory(sessionIdentifier: Int, bytes: ByteArray, timeoutMillis: Long = DEFAULT_SEND_TIMEOUT_MILLIS) {
+        requireTimeout(timeoutMillis)
+        synchronized(externalAccessorySendLock) {
+            try {
+                checkOpen()
+            } catch (failure: Error) {
+                fatal(failure)
+            }
+            val peerLimit = link.peerMaxControlPayloadBytes()
+                ?: throw IllegalStateException("EA send requires a successful iAP2 awaitReady")
+            val chunk = (peerLimit - 2).coerceAtMost(Iap2LinkEngine.MAX_PAYLOAD_BYTES - 2)
+            check(chunk > 0) { "iAP2 peer payload limit too small for External Accessory packets" }
+            val deadlineNanos = deadlineAfter(timeoutMillis)
+            var offset = 0
+            do {
+                val end = minOf(bytes.size, offset + chunk)
+                val queued = try {
+                    link.sendExternalAccessoryAwaitCapacity(sessionIdentifier, bytes.copyOfRange(offset, end), remainingMillis(deadlineNanos))
+                } catch (failure: Throwable) {
+                    if (failure is Error) fatal(failure)
+                    failClosed(failure)
+                }
+                if (!queued) failClosed(IOException("iAP2 could not queue the External Accessory packet before its timeout"))
+                offset = end
+            } while (offset < bytes.size)
         }
     }
 

@@ -82,6 +82,32 @@ class Iap2Session private constructor(
 
     fun reader(frame: Iap2Frame): Iap2BodyReader = Iap2Messages.reader(frame)
 
+    /**
+     * External Accessory Protocol data from an iPhone app (one packet per call, link thread). The
+     * identifier is the one the phone assigned in StartExternalAccessoryProtocolSession.
+     */
+    var onExternalAccessory: ((sessionIdentifier: Int, bytes: ByteArray) -> Unit)?
+        get() = channel.onExternalAccessory
+        set(value) {
+            channel.onExternalAccessory = value?.let { handler ->
+                { identifier, bytes ->
+                    emitTrace("IAP2 EA RX [$traceContext] session=$identifier bytes=${bytes.size}")
+                    handler(identifier, bytes)
+                }
+            }
+        }
+
+    /** Sends [bytes] to the iPhone app behind External Accessory session [sessionIdentifier]. */
+    fun sendExternalAccessory(sessionIdentifier: Int, bytes: ByteArray, timeoutMillis: Long = DEFAULT_SEND_TIMEOUT_MILLIS) {
+        try {
+            channel.sendExternalAccessory(sessionIdentifier, bytes, timeoutMillis)
+            emitTrace("IAP2 EA TX [$traceContext] session=$sessionIdentifier bytes=${bytes.size}")
+        } catch (failure: Throwable) {
+            emitTrace("IAP2 EA TX [$traceContext] session=$sessionIdentifier failed: ${failure.javaClass.simpleName}: ${failure.message}")
+            throw failure
+        }
+    }
+
     override fun close() {
         try {
             channel.close()

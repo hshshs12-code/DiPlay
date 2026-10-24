@@ -39,7 +39,20 @@ Runtime guards for APIs newer than 24:
 - The BYD standalone HUD helper refuses to run below API 28 before touching
   the API 28 signing APIs.
 
-## Fork features (0.2.13-legacy24.44)
+## Fork features (0.2.13-legacy24.45)
+
+24.45: iPhone companion app over the iPod-mode cable, user presets
+- iPod identification offers the External Accessory protocol `com.shilapi.xcertplay` (group 10,
+  0xEA00/0xEA01 received, 0xEA03 sent; withheld on the last-resort levels and retried without it
+  when a rejection names parameters 6, 7 or 10). `Iap2LinkChannel` / `Iap2CsmChannel` /
+  `Iap2Session` carry EA packets (link session 11) both ways; `Iap2IpodClient` tracks sessions.
+- `SoundControlBridge` (common): newline-delimited JSON protocol (hello/get/set/preset/eqPreset/
+  savePreset/deletePreset/neutralise/volume → state); `AudioEffectSettings.onSaved` pushes every
+  change made on the unit to the phone.
+- `AudioEffectSettingsJson` (full JSON form with clamped partial merge), `UserPresets` (named
+  full-settings snapshots on the unit), `UserPresetSeed` (first start saves the current sound as
+  "Good"), Sound → All presets shows user presets and "Save the current sound as a preset…".
+- `ios/DiPlaySound`: the SwiftUI app (xcodegen project), see its README.
 
 24.44: the handles the head-unit analysis turned up
 - `VendorEffects`: reads the vendor sound app's global effects on audio session 0 (LVM equalizer,

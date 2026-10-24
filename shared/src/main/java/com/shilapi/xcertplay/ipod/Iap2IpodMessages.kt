@@ -23,10 +23,16 @@ data class Iap2IpodConfig(
     /** Current the USB port can supply; announced with PowerSourceUpdate after authentication. */
     val availableCurrentMilliAmps: Int = 1_000,
     val language: String = "en",
+    /**
+     * External Accessory protocol the iPhone companion app opens an EASession for (its Info.plist
+     * lists the same string). Blank = do not offer one.
+     */
+    val externalAccessoryProtocol: String = Iap2IpodMessages.DEFAULT_EXTERNAL_ACCESSORY_PROTOCOL,
 ) {
     init {
         listOf(name, modelIdentifier, manufacturer, serialNumber, firmwareVersion, hardwareVersion, language)
             .forEach { require(it.isNotBlank() && '\u0000' !in it) { "Identification strings must be non-blank without NUL" } }
+        require('\u0000' !in externalAccessoryProtocol) { "External accessory protocol must not contain NUL" }
         require(sampleRates.isNotEmpty() && sampleRates.all { it in Iap2IpodMessages.SAMPLE_RATE_CODES }) { "Unsupported sample rate" }
         require(availableCurrentMilliAmps in 0..0xffff)
     }
@@ -84,7 +90,15 @@ object Iap2IpodMessages {
     const val ACCESSORY_HID_REPORT = 0x6802
     const val STOP_HID = 0x6803
     const val REQUEST_APP_LAUNCH = 0xea02
+    const val START_EXTERNAL_ACCESSORY_SESSION = 0xea00
+    const val STOP_EXTERNAL_ACCESSORY_SESSION = 0xea01
+    const val STATUS_EXTERNAL_ACCESSORY_SESSION = 0xea03
     const val IDENTIFICATION_INFORMATION_UPDATE = 0x1d05
+
+    /** ExternalAccessoryProtocolIdentifier of the one protocol the head unit offers. */
+    const val EXTERNAL_ACCESSORY_PROTOCOL_ID = 1
+    /** Must match UISupportedExternalAccessoryProtocols in the companion app's Info.plist. */
+    const val DEFAULT_EXTERNAL_ACCESSORY_PROTOCOL = "com.shilapi.xcertplay"
 
     const val USB_TRANSPORT_COMPONENT_ID = 1
     const val HID_COMPONENT_ID = 2
@@ -115,12 +129,15 @@ object Iap2IpodMessages {
         val allSampleRates: Boolean = false,
         /** Also declare the identification messages themselves (control-session version 2 rule in newer specs). */
         val declareIdentification: Boolean = false,
+        /** Offer the companion app's External Accessory protocol; the last-resort levels leave it out. */
+        val externalAccessory: Boolean = true,
     ) {
         fun describe(): String = listOfNotNull(
             when { !usbAudio -> "no USB-audio request"; !usbAudioInfo -> "USB-audio start only"; !usbAudioStop -> "USB-audio without stop"; allSampleRates -> "all sample rates"; else -> null },
             if (declareIdentification) "identification messages declared" else null,
             if (hid) null else "no media remote", if (appLaunch) null else "no app launch",
             if (setNowPlaying) null else "no seek/shuffle", if (power) null else "no power updates",
+            if (externalAccessory) null else "no companion app protocol",
         ).joinToString(", ").ifEmpty { "full" }
     }
 
@@ -140,11 +157,12 @@ object Iap2IpodMessages {
         6 -> Capabilities(hid = false, appLaunch = true, setNowPlaying = true, power = true)
         7 -> Capabilities(hid = true, appLaunch = false, setNowPlaying = false, power = true)
         8 -> Capabilities(hid = true, appLaunch = true, setNowPlaying = true, power = false)
-        9 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = true, usbAudio = false)
-        else -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = false, usbAudio = false)
+        9 -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = true, usbAudio = false, externalAccessory = false)
+        else -> Capabilities(hid = false, appLaunch = false, setNowPlaying = false, power = false, usbAudio = false, externalAccessory = false)
     }
 
-    fun messagesSent(level: Int): IntArray {
+    /** [externalAccessory]: also declare the External Accessory session messages for the iPhone companion app. */
+    fun messagesSent(level: Int, externalAccessory: Boolean = true): IntArray {
         val c = capabilities(level)
         val list = mutableListOf(AUTHENTICATION_CERTIFICATE, AUTHENTICATION_RESPONSE, START_NOW_PLAYING_UPDATES, STOP_NOW_PLAYING_UPDATES)
         if (c.declareIdentification) list.addAll(0, listOf(IDENTIFICATION_INFORMATION, IDENTIFICATION_INFORMATION_UPDATE))
@@ -154,10 +172,11 @@ object Iap2IpodMessages {
         if (c.setNowPlaying) list += SET_NOW_PLAYING_INFORMATION
         if (c.hid) list += listOf(START_HID, ACCESSORY_HID_REPORT, STOP_HID)
         if (c.appLaunch) list += REQUEST_APP_LAUNCH
+        if (externalAccessory && c.externalAccessory) list += STATUS_EXTERNAL_ACCESSORY_SESSION
         return list.toIntArray()
     }
 
-    fun messagesReceived(level: Int): IntArray {
+    fun messagesReceived(level: Int, externalAccessory: Boolean = true): IntArray {
         val c = capabilities(level)
         val list = mutableListOf(REQUEST_AUTHENTICATION_CERTIFICATE, REQUEST_AUTHENTICATION_CHALLENGE_RESPONSE,
             AUTHENTICATION_FAILED, AUTHENTICATION_SUCCEEDED, NOW_PLAYING_UPDATE)
@@ -165,13 +184,20 @@ object Iap2IpodMessages {
         if (c.usbAudio && c.usbAudioInfo) list += USB_DEVICE_MODE_AUDIO_INFORMATION
         if (c.power) list += POWER_UPDATE
         if (c.hid) list += DEVICE_HID_REPORT
+        if (externalAccessory && c.externalAccessory) list += listOf(START_EXTERNAL_ACCESSORY_SESSION, STOP_EXTERNAL_ACCESSORY_SESSION)
         return list.toIntArray()
     }
 
     /** One line with the declared message IDs, for the diagnostic log (payload lines are redacted from uploads). */
-    fun describeLists(level: Int): String =
-        "sent=[" + messagesSent(level).joinToString(",") { it.toString(16) } + "] received=[" + messagesReceived(level).joinToString(",") { it.toString(16) } + "]" +
-            " rates=" + (if (capabilities(level).allSampleRates) "all" else REQUIRED_SAMPLE_RATES.joinToString("/"))
+    fun describeLists(level: Int, externalAccessory: Boolean = true): String =
+        "sent=[" + messagesSent(level, externalAccessory).joinToString(",") { it.toString(16) } + "] received=[" + messagesReceived(level, externalAccessory).joinToString(",") { it.toString(16) } + "]" +
+            " rates=" + (if (capabilities(level).allSampleRates) "all" else REQUIRED_SAMPLE_RATES.joinToString("/")) + (if (externalAccessory) " ea=yes" else " ea=no")
+
+    /** StatusExternalAccessoryProtocolSession: [close] asks the phone to end the app's session. */
+    fun statusExternalAccessorySession(sessionIdentifier: Int, close: Boolean): Iap2Frame = Iap2Messages.buildRaw(STATUS_EXTERNAL_ACCESSORY_SESSION) {
+        u16(0, sessionIdentifier)
+        u8(1, if (close) 1 else 0)
+    }
 
     /** Level-0 lists, kept for callers that want the full set. */
     val MESSAGES_SENT: IntArray get() = messagesSent(0)
@@ -202,18 +228,24 @@ object Iap2IpodMessages {
     )
 
     /** IdentificationInformation for a USB-device-transport audio accessory, at the given fallback [level]. */
-    fun identificationInformation(config: Iap2IpodConfig, level: Int = 0): Iap2Frame = Iap2Messages.buildRaw(IDENTIFICATION_INFORMATION) {
+    fun identificationInformation(config: Iap2IpodConfig, level: Int = 0, externalAccessory: Boolean = true): Iap2Frame = Iap2Messages.buildRaw(IDENTIFICATION_INFORMATION) {
         val c = capabilities(level)
+        val ea = externalAccessory && c.externalAccessory && config.externalAccessoryProtocol.isNotBlank()
         string(0, config.name)
         string(1, config.modelIdentifier)
         string(2, config.manufacturer)
         string(3, config.serialNumber)
         string(4, config.firmwareVersion)
         string(5, config.hardwareVersion)
-        u16List(6, messagesSent(level).asIterable())
-        u16List(7, messagesReceived(level).asIterable())
+        u16List(6, messagesSent(level, ea).asIterable())
+        u16List(7, messagesReceived(level, ea).asIterable())
         u8(8, if (c.power) 2 else 0)   // PowerProvidingCapability: advanced when we send PowerSourceUpdate
         u16(9, 0)  // MaximumCurrentDrawnFromDevice
+        if (ea) group(10) { // SupportedExternalAccessoryProtocol: the companion app's EASession
+            u8(0, EXTERNAL_ACCESSORY_PROTOCOL_ID)
+            string(1, config.externalAccessoryProtocol)
+            u8(2, 0) // ExternalAccessoryProtocolMatchAction: no prompt, no App Store redirect
+        }
         string(12, config.language)
         strings(13, listOf(config.language))
         group(15) { // USBDeviceTransportComponent

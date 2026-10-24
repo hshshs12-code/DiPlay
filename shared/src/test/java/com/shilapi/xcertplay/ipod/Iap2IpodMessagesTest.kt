@@ -90,4 +90,21 @@ class Iap2IpodMessagesTest {
         assertEquals(73, state.batteryLevelPercent)
         assertEquals(true, state.externalChargerConnected)
     }
+
+    @Test
+    fun companionProtocolIsOfferedUntilTheLastResortLevelsAndCanBeWithheld() {
+        val full = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 0))
+        val group = full.group(10)
+        assertEquals(Iap2IpodMessages.EXTERNAL_ACCESSORY_PROTOCOL_ID, group.u8(0))
+        assertEquals(Iap2IpodMessages.DEFAULT_EXTERNAL_ACCESSORY_PROTOCOL, group.string(1))
+        assertEquals(0, group.u8(2))
+        assertTrue(full.u16List(7).containsAll(listOf(0xea00, 0xea01)) && full.u16List(6).contains(0xea03))
+        val withheld = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 0, externalAccessory = false))
+        assertTrue(!withheld.has(10) && !withheld.u16List(7).contains(0xea00) && !withheld.u16List(6).contains(0xea03))
+        val lastResort = Iap2BodyReader.of(Iap2IpodMessages.identificationInformation(config, 9))
+        assertTrue(!lastResort.has(10) && !lastResort.u16List(7).contains(0xea00))
+        val status = Iap2BodyReader.of(Iap2IpodMessages.statusExternalAccessorySession(0x1234, close = true))
+        assertEquals(0x1234, status.u16(0)); assertEquals(1, status.u8(1))
+        assertTrue(Iap2IpodMessages.describeLists(0).endsWith("ea=yes") && Iap2IpodMessages.describeLists(0, false).endsWith("ea=no"))
+    }
 }

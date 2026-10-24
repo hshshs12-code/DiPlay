@@ -92,6 +92,9 @@ object IpodAudioEngine {
     private class DirectContext(val connection: UsbDeviceConnection, val interfaces: List<UsbInterface>, val alternates: List<UsbAudioAlternate>)
     @Volatile private var direct: DirectContext? = null
     @Volatile var audioPath: String = ""; private set
+    /** True while the iPhone companion app holds an External Accessory session to this unit. */
+    @Volatile var phoneApp: Boolean = false; private set
+    @Volatile private var bridge: SoundControlBridge? = null
     private val traceCounts = HashMap<String, Int>()
 
     fun isRunning() = running.get()
@@ -145,6 +148,7 @@ object IpodAudioEngine {
         nowPlaying = CarPlayNowPlaying(); artwork = null; shuffle = null; repeat = null; power = IpodPowerState()
         capabilities = com.shilapi.xcertplay.ipod.Iap2IpodMessages.capabilities(0)
         synchronized(traceCounts) { traceCounts.clear() }
+        runCatching { UserPresetSeed.seedOnce(app) }
         worker = Thread({
             ThreadPriorities.transport()
             try { run(app) } catch (error: Throwable) {
@@ -209,10 +213,18 @@ object IpodAudioEngine {
                 isAttached = { usb.deviceList.values.any { it.deviceName == device.deviceName } }) { log(app, it) }
             stream = hidStream
             val session = Iap2Session.open(hidStream, traceContext = "ipod", onTrace = { trace(app, it) }, onArtwork = { onArtwork(app, it) })
+            val bridge = SoundControlBridge(app) { log(app, it) }
+            this.bridge = bridge
             try {
                 val config = ipodConfig(app)
                 val ipod = Iap2IpodClient(session, mfi, config, object : Iap2IpodClient.Listener {
                     override fun onProgress(line: String) = log(app, line)
+                    override fun onExternalAccessorySession(identifier: Int, open: Boolean) {
+                        bridge.onSession(identifier, open)
+                        phoneApp = bridge.connected
+                        notifyListeners()
+                    }
+                    override fun onExternalAccessoryData(identifier: Int, bytes: ByteArray) = bridge.onData(identifier, bytes)
                     override fun onStage(stage: Iap2IpodClient.Stage) {
                         when (stage) {
                             Iap2IpodClient.Stage.LINKING -> set(app, State.LINKING, "Waiting for the iPhone to open the accessory link…")
@@ -247,9 +259,12 @@ object IpodAudioEngine {
                     }
                 })
                 client = ipod
+                bridge.sender = { identifier, bytes -> ipod.sendExternalAccessory(identifier, bytes) }
+                bridge.start()
                 ipod.run(isCancelled = { !running.get() })
             } finally {
                 client = null
+                runCatching { bridge.stop() }; this.bridge = null; phoneApp = false
                 audio?.stop(); audio = null
                 direct = null
                 runCatching { session.close() }

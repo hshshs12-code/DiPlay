@@ -446,7 +446,7 @@ class IpodModeActivity : Activity() {
 
         statusPill.set(when (state) {
             IpodAudioEngine.State.IDLE, IpodAudioEngine.State.STOPPED -> "Not connected"
-            IpodAudioEngine.State.READY -> if (IpodAudioEngine.audioActive) "USB audio" else "Connected"
+            IpodAudioEngine.State.READY -> (if (IpodAudioEngine.audioActive) "USB audio" else "Connected") + (if (IpodAudioEngine.phoneApp) " · iPhone app" else "")
             IpodAudioEngine.State.FAILED -> "Needs attention"
             else -> "Connecting…"
         })

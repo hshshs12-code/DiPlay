@@ -39,3 +39,5 @@ release-signing.properties
 *.key
 *.apk
 *.aab
+ios/DiPlaySound/DiPlaySound.xcodeproj/xcuserdata/
+ios/DiPlaySound/DiPlaySound.xcodeproj/project.xcworkspace/xcuserdata/
